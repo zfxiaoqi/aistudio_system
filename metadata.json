@@ -1,0 +1,6 @@
+{
+  "name": "巴迪高品牌视觉工作台",
+  "description": "巴迪高(BADIGAO)一次性内裤及轻运动服饰AI品牌视觉生成工作台，支持高保真产品视觉渲染、细节特写、图像局部涂抹编辑、静态图转视频、品牌资产和历史生成记录管理。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
