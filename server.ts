@@ -27,6 +27,7 @@ const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 app.use(express.json({ limit: "50mb" }));
 
 const GENERATED_DIR = path.join(process.cwd(), "generated");
+const GEMINI_API_BASE_URL = (process.env.GEMINI_API_BASE_URL || "https://generativelanguage.googleapis.com/v1beta").replace(/\/$/, "");
 const OPENAI_PROXY_URL = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
 const openAIProxyAgent = OPENAI_PROXY_URL ? new ProxyAgent(OPENAI_PROXY_URL) : undefined;
 app.use("/generated", express.static(GENERATED_DIR));
@@ -205,7 +206,7 @@ async function requestGeminiImage(args: {
   });
 
   const response = await undiciFetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+    `${GEMINI_API_BASE_URL}/models/${encodeURIComponent(model)}:generateContent`,
     {
       method: "POST",
       headers: {
@@ -550,6 +551,7 @@ app.get("/api/gemini/status", (_req, res) => {
   res.json({
     configured: Boolean(process.env.GEMINI_API_KEY),
     model: process.env.GEMINI_IMAGE_MODEL || "gemini-3-pro-image",
+    apiVersion: GEMINI_API_BASE_URL.split("/").pop() || "v1beta",
   });
 });
 
