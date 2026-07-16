@@ -53,6 +53,14 @@ function getPromptAssetMetadata(project: Project) {
   return getPromptAssets(project).map(({ name, role, weight }) => ({ name, role, weight }));
 }
 
+function getProjectImageAnalyses(project: Project): AssetAnalysis[] {
+  return [
+    ...project.productImages.map((asset) => asset.analysis),
+    ...project.characterImages.map((asset) => asset.analysis),
+    ...project.referenceImages.map((asset) => asset.analysis),
+  ].filter((analysis): analysis is AssetAnalysis => Boolean(analysis));
+}
+
 const TASK_HISTORY_STORAGE_LIMIT = 30;
 
 function persistWorkspaceState(projects: Project[], tasks: Task[], currentProjectId: string) {
@@ -177,7 +185,8 @@ export default function App() {
   const [generatingProgress, setGeneratingProgress] = useState(0);
   const [generatingLogs, setGeneratingLogs] = useState<string[]>([]);
   const [generationError, setGenerationError] = useState("");
-  const [actualPromptPreview, setActualPromptPreview] = useState("");
+  const [actualPromptPreviewEnglish, setActualPromptPreviewEnglish] = useState("");
+  const [actualPromptPreviewChinese, setActualPromptPreviewChinese] = useState("");
   const [isPromptPreviewLoading, setIsPromptPreviewLoading] = useState(false);
 
   // Editing Modals States
@@ -285,8 +294,7 @@ export default function App() {
       name: item.name,
       weight: item.weight,
     })),
-    prompt: currentProject.optimizedPromptEnglish || currentProject.optimizedPrompt || currentProject.originalPrompt,
-    negativePrompt: currentProject.negativePromptEnglish || currentProject.negativePrompt,
+    imageAnalyses: getProjectImageAnalyses(currentProject),
     assetMetadata: getPromptAssetMetadata(currentProject),
   }), [currentProject]);
 
@@ -303,11 +311,13 @@ export default function App() {
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data?.error || "实际生图提示词生成失败。");
-        setActualPromptPreview(String(data.prompt || ""));
+        setActualPromptPreviewEnglish(String(data.prompt || ""));
+        setActualPromptPreviewChinese(String(data.displayPromptChinese || ""));
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
         console.error("Prompt preview failed:", error);
-        setActualPromptPreview("实际生图提示词暂时无法生成，请检查本地服务。" );
+        setActualPromptPreviewEnglish("");
+        setActualPromptPreviewChinese("生图提示词暂时无法生成，请检查本地服务。");
       } finally {
         if (!controller.signal.aborted) setIsPromptPreviewLoading(false);
       }
@@ -344,6 +354,10 @@ export default function App() {
       return p;
     });
     setProjects(updated);
+    // Existing results belong to the previous parameter snapshot. Hide them as
+    // soon as generation-affecting settings change so they are not presented
+    // beside a newly compiled prompt for a different scene.
+    setActiveTaskId(null);
     saveStateToLocalStorage(updated, tasks);
   };
 
@@ -485,6 +499,7 @@ export default function App() {
 
   // Trigger main brand visual generation pipeline
   const handleGenerateBrandVisual = async () => {
+    const generationProject = currentProject;
     setGenerationError("");
     setIsGenerating(true);
     setGeneratingProgress(12);
@@ -495,23 +510,26 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          visualType: currentProject.visualType,
-          scene: currentProject.scene,
-          productFunctions: currentProject.productFunctions,
-          shotScale: currentProject.shotScale,
-          cameraAngle: currentProject.cameraAngle,
-          tone: currentProject.tone,
-          originalPrompt: currentProject.originalPrompt,
-          resolution: currentProject.resolution,
-          aspectRatio: currentProject.aspectRatio,
-          imageCount: currentProject.imageCount,
-          modelCount: currentProject.modelCount,
-          productImages: currentProject.productImages.map((item) => item.name),
-          characterImages: currentProject.characterImages.map((item) => item.name),
-          referenceImages: currentProject.referenceImages.map((item) => item.name),
-          prompt: currentProject.optimizedPromptEnglish || currentProject.optimizedPrompt || currentProject.originalPrompt,
-          negativePrompt: currentProject.negativePromptEnglish || currentProject.negativePrompt,
-          assets: getPromptAssets(currentProject),
+          visualType: generationProject.visualType,
+          scene: generationProject.scene,
+          productFunctions: generationProject.productFunctions,
+          shotScale: generationProject.shotScale,
+          cameraAngle: generationProject.cameraAngle,
+          tone: generationProject.tone,
+          originalPrompt: generationProject.originalPrompt,
+          resolution: generationProject.resolution,
+          aspectRatio: generationProject.aspectRatio,
+          imageCount: generationProject.imageCount,
+          modelCount: generationProject.modelCount,
+          productImages: generationProject.productImages.map((item) => item.name),
+          characterImages: generationProject.characterImages.map((item) => item.name),
+          referenceImages: generationProject.referenceImages.map((item) => item.name),
+          referenceImageWeights: generationProject.referenceImages.map((item) => ({
+            name: item.name,
+            weight: item.weight,
+          })),
+          imageAnalyses: getProjectImageAnalyses(generationProject),
+          assets: getPromptAssets(generationProject),
         }),
       });
 
@@ -533,29 +551,33 @@ export default function App() {
           projectId: currentProjectId,
           taskId: `task-${Date.now()}`,
           createdAt: new Date().toISOString(),
-          productImages: currentProject.productImages.map(p => p.url),
-          characterImages: currentProject.characterImages.map(p => p.url),
-          modelCount: currentProject.modelCount,
-          keepCharacter: currentProject.keepCharacter,
-          referenceImages: currentProject.referenceImages.map(r => ({ url: r.url, weight: r.weight })),
-          visualType: currentProject.visualType,
-          scene: currentProject.scene,
-          productFunctions: currentProject.productFunctions,
-          shotScale: currentProject.shotScale,
-          cameraAngle: currentProject.cameraAngle,
-          tone: currentProject.tone,
-          resolution: currentProject.resolution,
-          aspectRatio: currentProject.aspectRatio,
-          imageCount: currentProject.imageCount,
-          originalPrompt: currentProject.originalPrompt,
-          optimizedPrompt: currentProject.optimizedPrompt || currentProject.originalPrompt,
-          optimizedPromptEnglish: currentProject.optimizedPromptEnglish,
-          finalPrompt: currentProject.optimizedPrompt || currentProject.originalPrompt,
-          negativePrompt: currentProject.negativePrompt || "",
-          negativePromptEnglish: currentProject.negativePromptEnglish,
-          promptConfigVersion: currentProject.promptConfigVersion || "",
-          selectedPromptFragments: currentProject.selectedPromptFragments || [],
-          promptWarnings: currentProject.promptWarnings || [],
+          productImages: generationProject.productImages.map(p => p.url),
+          characterImages: generationProject.characterImages.map(p => p.url),
+          modelCount: generationProject.modelCount,
+          keepCharacter: generationProject.keepCharacter,
+          referenceImages: generationProject.referenceImages.map(r => ({ url: r.url, weight: r.weight })),
+          visualType: generationProject.visualType,
+          scene: data.scene || generationProject.scene,
+          productFunctions: generationProject.productFunctions,
+          shotScale: generationProject.shotScale,
+          cameraAngle: generationProject.cameraAngle,
+          tone: generationProject.tone,
+          resolution: generationProject.resolution,
+          aspectRatio: generationProject.aspectRatio,
+          imageCount: generationProject.imageCount,
+          originalPrompt: generationProject.originalPrompt,
+          optimizedPrompt: data.positivePrompt || generationProject.optimizedPrompt || generationProject.originalPrompt,
+          optimizedPromptEnglish: data.positivePromptEnglish || generationProject.optimizedPromptEnglish,
+          finalPrompt: data.positivePrompt || generationProject.optimizedPrompt || generationProject.originalPrompt,
+          negativePrompt: data.negativePrompt || generationProject.negativePrompt || "",
+          negativePromptEnglish: data.negativePromptEnglish || generationProject.negativePromptEnglish,
+          promptConfigVersion: data.promptConfigVersion || generationProject.promptConfigVersion || "",
+          selectedPromptFragments: Array.isArray(data.selectedPromptFragments)
+            ? data.selectedPromptFragments
+            : generationProject.selectedPromptFragments || [],
+          promptWarnings: Array.isArray(data.promptWarnings)
+            ? data.promptWarnings
+            : generationProject.promptWarnings || [],
           status: "completed",
           results: generatedUrls,
           editVersions: {},
@@ -766,7 +788,8 @@ export default function App() {
                 isOptimizing={isOptimizing}
                 onGenerate={handleGenerateBrandVisual}
                 isGenerating={isGenerating}
-                actualPromptPreview={actualPromptPreview}
+                actualPromptPreviewEnglish={actualPromptPreviewEnglish}
+                actualPromptPreviewChinese={actualPromptPreviewChinese}
                 isPromptPreviewLoading={isPromptPreviewLoading}
               />
             </div>

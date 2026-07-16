@@ -181,13 +181,13 @@ function normalizeGeminiImageResolution(resolution: string) {
 const GEMINI_REFERENCE_BOUNDARY = `
 [REFERENCE ROLE BOUNDARY — MANDATORY]
 Every uploaded image has one and only one role. Never merge roles between images.
-- STYLE REFERENCE: extract only abstract photographic attributes such as lighting softness, color palette, tonal contrast, depth, negative-space rhythm, and general framing principles. Do not reproduce its subject, face, body, garment, pose, action, crop, camera placement, background, furniture, props, architecture, object placement, or exact composition.
+- STYLE REFERENCE: may influence photographic style, pose, action, crop, camera placement, background, furniture, props, architecture, object placement, and composition. Do not reproduce its subject, character identity, face, body, or garment design.
 - CHARACTER IDENTITY: preserve only the adult person's identity, facial features, hairstyle, and body proportions. Do not copy clothing, pose, crop, background, lighting, or scene objects.
 - PRODUCT MASTER/DETAIL: preserve only the product's design, construction, color, texture, seams, proportions, and visible brand structure. Do not copy the source background, body pose, crop, or surrounding objects.
-The requested scene and camera settings must create a genuinely new photograph. A near-duplicate, traced layout, or recognizable recreation of any style reference is a failed result.
+The requested scene and camera settings must create a commercially usable photograph while respecting every reference role boundary.
 `;
 
-const GEMINI_FINAL_COMPLIANCE = "FINAL COMPLIANCE CHECK: Create a new scene and a clearly distinct composition. Use style references only for abstract visual language. Preserve product fidelity and character identity from their dedicated references. Reject any result that recreates a style reference's recognizable content or layout.";
+const GEMINI_FINAL_COMPLIANCE = "FINAL COMPLIANCE CHECK: A style reference may influence the visual style, pose, action, crop, camera placement, background, props, object placement, and composition, but must never supply the subject, character identity, face, body, or garment design. Preserve product fidelity and character identity from their dedicated references.";
 const GEMINI_SAFE_COMMERCIAL_FRAMING = "Depict clearly adult professional models only. Present the apparel in a neutral, non-sexualized commercial catalog and brand-campaign context, with natural posture and product-focused framing.";
 const GEMINI_NO_PEOPLE_FRAMING = "Create a strictly people-free commercial product photograph. Do not depict any person, model, face, hand, skin, body part, human reflection, or human-shaped mannequin. Use only the product, scene, styling surfaces, props, lighting, and abstract photographic direction.";
 type GeminiReferenceMetadata = Pick<PromptImageInput, "name" | "role" | "weight">;
@@ -196,12 +196,12 @@ function getGeminiReferenceInstruction(asset: GeminiReferenceMetadata, index: nu
   const weight = asset.weight || "medium";
   const weightRules = {
     low: "LOW style intensity: use only a faint secondary cue.",
-    medium: "MEDIUM style intensity: make the abstract visual direction noticeable, but keep the new composition clearly distinct.",
-    high: "HIGH style intensity: strongly apply only the permitted abstract photographic attributes; high weight never permits copying content or exact layout.",
+    medium: "MEDIUM style intensity: make the referenced visual direction noticeable while respecting the restricted content boundary.",
+    high: "HIGH style intensity: strongly apply the referenced visual direction; high weight never permits copying the subject, character identity, face, body, or garment design.",
   } as const;
 
   const roleRules: Record<ImageReferenceRole, string> = {
-    style_reference: `ROLE = STYLE REFERENCE ONLY. ${weightRules[weight]} Forbidden from this image: subject identity, face, body, garment design, pose, action, crop, background, props, furniture, architecture, object placement, and exact composition.`,
+    style_reference: `ROLE = STYLE REFERENCE ONLY. ${weightRules[weight]} Forbidden from this image: subject, character identity, face, body, and garment design.`,
     character_identity: "ROLE = CHARACTER IDENTITY ONLY. Preserve adult identity, facial features, hairstyle, and body proportions. Ignore and replace the source clothing, pose, crop, background, lighting, and props.",
     product_master: "ROLE = PRODUCT MASTER. Preserve product silhouette, construction, color, texture, seams, binding, proportions, and visible brand structure with highest fidelity. Ignore the source background, pose, crop, and surrounding objects.",
     product_detail: "ROLE = PRODUCT DETAIL. Preserve only the visible material and construction details. Do not inherit the source scene, pose, crop, or unrelated objects.",
@@ -235,6 +235,43 @@ function buildGeminiPromptPreview(prompt: string, assets: GeminiReferenceMetadat
     `${getGeminiReferenceInstruction(asset, index)}\n[BINARY REFERENCE IMAGE ${index + 1} IS INSERTED HERE]`,
   );
   return [prompt, GEMINI_REFERENCE_BOUNDARY.trim(), ...referenceBlocks, GEMINI_FINAL_COMPLIANCE].join("\n\n");
+}
+
+function buildChinesePromptPreview(
+  basePrompt: string,
+  negativePrompt: string,
+  assets: GeminiReferenceMetadata[],
+  imageCount: number,
+  modelCount: number,
+) {
+  const roleLabels: Record<ImageReferenceRole, string> = {
+    product_master: "产品主参考图",
+    product_detail: "产品细节参考图",
+    character_identity: "人物身份参考图",
+    style_reference: "风格参考图",
+  };
+  const referenceBlocks = orderGeminiReferences(assets).map((asset, index) => {
+    const weight = asset.weight === "high" ? "高" : asset.weight === "low" ? "低" : "中";
+    const boundary = asset.role === "product_master" || asset.role === "product_detail"
+      ? "仅锁定产品外观、结构、材质和细节，不复制原图背景与构图。"
+      : asset.role === "character_identity"
+      ? "仅保持成年人物身份、五官、发型和体型，不复制服装、姿势、裁切、背景与光线。"
+      : "可参考视觉风格、姿势、动作、裁切、机位、背景、道具、物体位置与构图；禁止复制主体、人物身份、脸、身体和服装设计。";
+    return `参考图${index + 1}：${asset.name}（${roleLabels[asset.role]}，权重：${weight}）\n${boundary}`;
+  });
+
+  return [
+    basePrompt,
+    `【商业安全构图】\n${modelCount === 0
+      ? "严格保持无人画面，不得出现人物、人体局部、手、脸、皮肤、人物倒影或人形模特。"
+      : "保持成年人物、自然姿态、非情色表达和可信人体结构，产品必须清晰、完整且无遮挡。"}`,
+    `【批次变化】\n本次生成${imageCount}张。保持产品、品牌规则与参考图职责一致，仅对动作、取景或细微构图做合理变化。`,
+    negativePrompt ? `【必须避免】\n${negativePrompt}` : "",
+    referenceBlocks.length
+      ? `【参考图使用边界】\n${referenceBlocks.join("\n\n")}`
+      : "【参考图使用边界】\n本次没有附加参考图。",
+    "【最终执行要求】\n风格参考图可影响视觉风格、姿势、动作、裁切、机位、背景、道具、物体位置与构图，但禁止复制其主体、人物身份、脸、身体和服装设计；产品与人物参考图继续严格遵守各自角色边界。",
+  ].filter(Boolean).join("\n\n");
 }
 
 function normalizeReferenceMetadata(value: unknown): GeminiReferenceMetadata[] {
@@ -876,16 +913,21 @@ app.post("/api/gemini/prompt-preview", (req, res) => {
     const compiled = compilePrompt(input);
     const assets = normalizeReferenceMetadata(req.body?.assetMetadata);
     const imageCount = Math.max(1, Math.min(6, Number(input.imageCount) || 1));
-    const basePrompt = typeof req.body?.prompt === "string" && req.body.prompt.trim()
-      ? req.body.prompt.trim()
-      : compiled.positivePromptEnglish || compiled.positivePrompt;
-    const negativePrompt = typeof req.body?.negativePrompt === "string" && req.body.negativePrompt.trim()
-      ? req.body.negativePrompt.trim()
-      : compiled.negativePromptEnglish || compiled.negativePrompt;
+    const basePrompt = compiled.positivePromptEnglish || compiled.positivePrompt;
+    const negativePrompt = compiled.negativePromptEnglish || compiled.negativePrompt;
+    const displayBasePrompt = compiled.positivePrompt;
+    const displayNegativePrompt = compiled.negativePrompt;
     const generationPrompt = buildGeminiGenerationPrompt(basePrompt, negativePrompt, 0, imageCount, input.modelCount);
 
     return res.json({
       prompt: buildGeminiPromptPreview(generationPrompt, assets),
+      displayPromptChinese: buildChinesePromptPreview(
+        displayBasePrompt,
+        displayNegativePrompt,
+        assets,
+        imageCount,
+        input.modelCount,
+      ),
       negativePrompt,
       model: process.env.GEMINI_IMAGE_MODEL || "gemini-3-pro-image",
     });
@@ -908,12 +950,10 @@ app.post("/api/gemini/generate-images", async (req, res) => {
     const compiled = compilePrompt(input);
     const assets = normalizeReferenceAssets(req.body?.assets);
     const imageCount = Math.max(1, Math.min(6, Number(input.imageCount) || 1));
-    const basePrompt = typeof req.body?.prompt === "string" && req.body.prompt.trim()
-      ? req.body.prompt.trim()
-      : compiled.positivePromptEnglish || compiled.positivePrompt;
-    const negativePrompt = typeof req.body?.negativePrompt === "string" && req.body.negativePrompt.trim()
-      ? req.body.negativePrompt.trim()
-      : compiled.negativePromptEnglish || compiled.negativePrompt;
+    // The current structured selection is authoritative. Never let a cached prompt
+    // from a previous scene override the scene selected for this generation.
+    const basePrompt = compiled.positivePromptEnglish || compiled.positivePrompt;
+    const negativePrompt = compiled.negativePromptEnglish || compiled.negativePrompt;
 
     await mkdir(GENERATED_DIR, { recursive: true });
     const results: string[] = [];
@@ -959,9 +999,17 @@ app.post("/api/gemini/generate-images", async (req, res) => {
       results,
       provider: "google",
       model,
+      scene: input.scene,
       aspectRatio: input.aspectRatio,
       resolution: normalizeGeminiImageResolution(input.resolution),
       referenceImageCount: assets.length,
+      positivePrompt: compiled.positivePrompt,
+      positivePromptEnglish: compiled.positivePromptEnglish,
+      negativePrompt: compiled.negativePrompt,
+      negativePromptEnglish: compiled.negativePromptEnglish,
+      promptConfigVersion: compiled.configVersion,
+      selectedPromptFragments: compiled.selectedFragments,
+      promptWarnings: compiled.warnings,
     });
   } catch (error) {
     console.error("Gemini image generation failed:", error);

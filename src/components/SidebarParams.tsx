@@ -26,7 +26,8 @@ interface SidebarParamsProps {
   isOptimizing: boolean;
   onGenerate: () => void;
   isGenerating: boolean;
-  actualPromptPreview: string;
+  actualPromptPreviewEnglish: string;
+  actualPromptPreviewChinese: string;
   isPromptPreviewLoading: boolean;
 }
 
@@ -37,7 +38,8 @@ export default function SidebarParams({
   isOptimizing,
   onGenerate,
   isGenerating,
-  actualPromptPreview,
+  actualPromptPreviewEnglish,
+  actualPromptPreviewChinese,
   isPromptPreviewLoading,
 }: SidebarParamsProps) {
   // Collapsible section state
@@ -719,26 +721,26 @@ export default function SidebarParams({
               <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3 space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <div>
-                    <p className="text-[11px] font-bold text-slate-700">实际生图提示词（英文）</p>
-                    <p className="mt-0.5 text-[9px] text-slate-400">随选项实时更新，与提交给 Gemini 的完整文本指令一致</p>
+                    <p className="text-[11px] font-bold text-slate-700">生图提示词（中文展示）</p>
+                    <p className="mt-0.5 text-[9px] text-slate-400">页面展示中文便于核对，复制时使用实际提交给 Gemini 的英文版本</p>
                   </div>
                   {isPromptPreviewLoading && <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-500 shrink-0" />}
                 </div>
                 <textarea
                   readOnly
-                  aria-label="实际生图提示词（英文）"
-                  value={isPromptPreviewLoading && !actualPromptPreview ? "正在编排实际生图提示词..." : actualPromptPreview}
+                  aria-label="生图提示词（中文展示）"
+                  value={isPromptPreviewLoading && !actualPromptPreviewChinese ? "正在编排生图提示词..." : actualPromptPreviewChinese}
                   rows={9}
                   className="w-full rounded-xl border border-slate-200 bg-white p-3 font-mono text-[10px] leading-relaxed text-slate-600 resize-y focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                 />
                 <button
                   type="button"
-                  disabled={!actualPromptPreview || isPromptPreviewLoading}
-                  onClick={() => copyPrompt(actualPromptPreview, "actual")}
+                  disabled={!actualPromptPreviewEnglish || isPromptPreviewLoading}
+                  onClick={() => copyPrompt(actualPromptPreviewEnglish, "actual")}
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-semibold text-slate-600 flex items-center justify-center gap-1.5 disabled:opacity-50"
                 >
                   {copiedPrompt === "actual" ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  {copiedPrompt === "actual" ? "已复制实际提示词" : "复制实际提示词"}
+                  {copiedPrompt === "actual" ? "已复制英文提示词" : "复制英文提示词"}
                 </button>
               </div>
 

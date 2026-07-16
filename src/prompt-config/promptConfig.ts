@@ -113,10 +113,21 @@ export const SCENE_OPTIONS: Record<VisualTypeId, PromptOption[]> = {
       description: "蓝白海岸与轻旅行感",
       recommendedTone: "蓝色调",
       prompt:
-        "蓝白主调、清透自然光、海边礁石、开阔天空、大面积留白、轻旅行感、真实笑容、自然风感、清爽亚裔女性、白色浴巾包裹、浅蓝衬衫、行李箱出行符号、轻松出发、干净即自在、治愈松弛、真实商业摄影。",
+        "蓝白主调、清透自然光、海边礁石、开阔天空、大面积留白、轻旅行感、真实笑容、自然风感、清爽亚裔女性、轻松出发、干净即自在、治愈松弛、真实商业摄影。",
       negativePrompt:
         "旅游打卡照，游客合影，商业假笑，椰树度假风，泳圈，堆叠遮阳伞，巨浪，风暴，戏剧性晚霞，金色夕阳，过饱和蓝天，荧光海水，虚假蓝幕，棚拍海景，背景贴图，海平线倾斜",
       version: 2,
+    },
+    {
+      id: "绿色草地",
+      label: "绿色草地",
+      description: "开阔蓝天、鲜活草坪与阳光生命力",
+      recommendedTone: "蓝色调",
+      prompt:
+        "开阔洁净的蓝天草坪品牌大片。情绪配方以自在舒适35%、清爽洁净25%、阳光生命力20%、亲近陪伴15%和轻微趣味感5%构成；人物不是表演快乐，而是在自然阳光与微风中真实放松、自由舒展。天空为晴朗通透的中高明度天蓝或蔚蓝，占画面45%–75%；大面积连续柔软草地呈自然黄绿色与草绿色，保留真实明暗和细密草叶层次，远处仅有低矮树线或柔和丘坡，地平线位于画面下方15%–30%，空气清澈无灰雾。人物为22–30岁年轻亚洲女性，体态匀称自然、五官清秀且有辨识度、暖中性真实肤色、轻薄裸妆、自然黑或深棕发色，保留毛孔、细小绒毛和日光肤色过渡；服装以奶油白、柔白或浅米白的简洁背心、轻薄衬衫、舒适服或巴迪高产品为主，白色织物高光必须保留纹理。晴朗上午9:00–11:00或下午3:00–5:00的明亮日光作为侧前方或斜上方主光，以自然天光或柔光反射轻补阴影。优先采用40–90cm低机位与5°–20°轻微仰角，让蓝天成为主背景；若用户另选明确镜头角度，则以用户选择为准，同时保持低地平线、大面积留白、非对称平衡、自然抓拍和真实透视。蓝天约55%、草地与树线20%、人物白色15%、肤色8%、巴迪高蓝#2899ff或包装色点缀2%。单人可从草地漫步、迎光呼吸、抬手遮阳、衣摆随风、草地轻坐、棉花互动或双臂舒展中选择一个自然进行中的动作；双人可从并肩漫步、牵手相视、轻靠相依、迎光呼应、产品共持、前后层次或背靠背中选择一个非同步的朋友感互动。根据所选景别匹配草地漫步全身、迎光呼吸中景、双人并肩行走、棉花互动近景或草地轻坐场景；道具仅可克制使用产品包装、奶油白柔软棉花、白色轻纱、米白野餐布、浅蓝软垫、藤编小篮或一本书中的1–2种。画面清爽、舒适、有生命力，具有高级真实商业摄影质感，不过度精修。",
+      negativePrompt:
+        "海边，海洋，海水，沙滩，礁石，海岸线，室内空间，居家环境，房间，摄影棚内景，墙壁，窗帘，家具，阴天灰雾，雾霾，灰蒙滤镜，荧光绿草地，塑料假草，过饱和蓝天，青绿色偏色，杂乱树林，高树线遮挡天空，地平线穿过头部或颈部，天空面积过小，白色服装过曝成纯白块，眼窝发黑，下颌死黑，正午顶光，硬阴影，戏剧性夕阳，商业假笑，游客打卡照，僵直摆拍，精确镜面对称，动作完全同步，网红脸，欧美模板脸，幼态脸，塑料皮肤，过度磨皮，夸张瘦身，性感姿势，低俗内衣广告感，道具堆叠，野餐用品过多，棉花卡通化，荧光品牌色，过度锐化草叶，虚假景深，背景贴图，棚拍草地，错误重力，错误透视",
+      version: 1,
     },
     {
       id: "居家松弛",
@@ -321,7 +332,7 @@ export const ASPECT_RATIO_OPTIONS: PromptOption[] = [
   { id: "3:4", label: "3:4", prompt: "3:4竖构图，默认电商主视觉画幅，人物约占45%–65%，保留环境与呼吸留白。", version: 1 },
   { id: "4:3", label: "4:3", prompt: "4:3横构图，适合双人互动与空间叙事，确保空间可读、人物完整。", version: 1 },
   { id: "9:16", label: "9:16", prompt: "9:16竖屏构图，适合短视频封面，人物纵向舒展，上下预留平台UI安全区。", version: 1 },
-  { id: "16:9", label: "16:9", prompt: "16:9宽屏品牌KV构图，人物偏侧，保留大面积连续文案区；海边场景天空留白约50%–65%。", version: 1 },
+  { id: "16:9", label: "16:9", prompt: "16:9宽屏品牌KV构图，人物偏侧，保留大面积连续文案区；开阔户外场景应保留充足天空或环境留白。", version: 2 },
 ];
 
 export const RESOLUTION_OPTIONS: PromptOption[] = [
@@ -348,12 +359,17 @@ const ENGLISH_VISUAL_TYPE: Record<VisualTypeId, string> = {
 };
 
 const ENGLISH_SCENES: Record<string, string> = {
-  "海边自在": "Blue-and-white tone, fresh natural light, seaside rocks, open sky, generous negative space, light-travel energy, genuine smiles, natural breeze, fresh-looking Asian woman, wrapped in a white bath towel, light blue shirt, suitcase as travel symbol, easy departure, clean and effortless, healing relaxation, real commercial photography.",
+  "海边自在": "Blue-and-white tone, fresh natural light, seaside rocks, open sky, generous negative space, light-travel energy, genuine smiles, natural breeze, fresh-looking Asian woman, easy departure, clean and effortless, healing relaxation, real commercial photography.",
+  "绿色草地": "Create an open, clean blue-sky grassland brand campaign with an emotional mix of effortless comfort 35%, fresh cleanliness 25%, sunny vitality 20%, warm companionship 15%, and subtle playfulness 5%. The women are not performing happiness; they are genuinely relaxed, free, and unburdened in natural sunlight and a light breeze. Use a clear medium-to-high-value blue sky occupying 45–75% of the frame, a broad continuous lawn with natural yellow-green and grass-green variation, realistic fine grass texture, a low horizon at 15–30%, and only a low tree line or soft distant slope. Keep the air transparent and clean. Use unmistakably adult Asian women aged 22–30 with natural balanced bodies, distinctive non-influencer facial features, warm-neutral real skin, light nude makeup, and natural black or dark-brown hair. Preserve pores, fine facial hair, skin-tone transitions, and believable daylight texture. Style them in simple cream-white, soft-white, or pale-beige tops, lightweight shirts, comfortable clothing, or the Badigao product; retain textile detail in white highlights. Use bright sunlight from 9–11 a.m. or 3–5 p.m. as a side-front or diagonal key, with soft skylight or reflector fill so eye sockets and jawlines remain readable. Prefer a 40–90 cm low camera with a subtle 5–20 degree upward angle when compatible with the user's selected camera angle; otherwise obey the explicit camera choice while preserving the low horizon, generous sky negative space, asymmetric balance, candid timing, and credible perspective. Target a visual ratio of roughly 55% sky, 20% lawn and tree line, 15% white clothing, 8% skin tone, and 2% restrained Badigao blue #2899ff or packaging-color accent. For one person, choose one naturally ongoing action from barefoot grass walking, breathing toward sunlight, shielding the eyes, a shirt hem moving in the breeze, relaxed sitting, gentle cotton interaction, or open-arm stretching. For two people, choose one unsynchronized friend-like interaction from walking side by side, holding hands and exchanging a glance, gently leaning together, responding to sunlight, sharing a product, foreground-background layering, or relaxed back-to-back positioning. Match the selected shot scale to one of five photographic templates: full-body grass walk, medium sunlight-breathing portrait, layered two-person walk, close cotton interaction, or relaxed grass sitting. Use at most one or two restrained props from product packaging, soft cream-white cotton, white gauze, an off-white picnic cloth, a pale-blue cushion, a small wicker basket, or one book. The result must feel fresh, comfortable, alive, naturally captured, premium, and realistically photographed without excessive retouching.",
   "居家松弛": "Creamy beige, warm white natural light, wooden flooring, light walls, sheer curtains and floor-to-ceiling windows, Asian woman, home relaxation, daily life feeling, sense of companionship, soft and skin-friendly, effortless sophistication, natural smiles, relaxed body posture, low-saturation color palette, real commercial photography.",
   "米色自在": "Creamy beige, soft light studio, minimalist space, rounded structures, natural woman, relaxed smiles, skin-friendly comfort, high-end lifestyle, low saturation, real commercial photography.",
   "蓝色洁净": "Pale blue clean studio, blue-and-white tone, minimalist background, fresh airy feeling, single-person light motion, dual-person front-and-back comparison, product structure demonstration, full rear coverage, ribbed cotton texture, partial detail close-up, light stretch at leg opening, high-elastic rubber band, soft and skin-friendly, non-binding/non-pinching, no wedgie, double-layered crotch, EO sterilization, 10A antibacterial, A-class maternal/infant level, safe and gentle, real commercial photography.",
   "居家柔弹与立体包裹": "Creamy beige home, natural window light, light exercise stretching, soft blue spheres, real Asian woman, natural body stretching, waistband stretching, 3D hip coverage, 3/4 rear view, fine ribbed fabric texture, flat leg openings, non-binding/non-pinching, no shifting, soft resilience, daily life feeling, real commercial photography.",
   "蓝色洁净功能证据系统": "Pale blue clean studio, blue-and-white tone, minimalist background, fresh airy feeling, single-person light motion, dual-person front-and-back comparison, product structure demonstration, full rear coverage, ribbed cotton texture, partial detail close-up, light stretch at leg opening, high-elastic rubber band, soft and skin-friendly, functional evidence, e-commerce professional feeling.",
+};
+
+const ENGLISH_SCENE_NEGATIVES: Record<string, string> = {
+  "绿色草地": "seaside, sea, ocean, seawater, beach, sand, seaside rocks, coastline, indoor space, home interior, room, indoor studio, wall, curtains, furniture, overcast gray sky, haze, smog, gray filter, fluorescent green grass, plastic artificial turf, oversaturated blue sky, cyan-green color cast, cluttered forest, tall tree line blocking the sky, horizon crossing the head or neck, insufficient sky area, blown-out white clothing, crushed eye sockets, black jaw shadow, harsh midday top light, hard shadows, dramatic sunset, fake commercial smile, tourist snapshot, stiff posing, exact mirror symmetry, perfectly synchronized actions, influencer face, Western template face, childlike face, plastic skin, excessive retouching, artificial slimming, sexualized pose, cheap lingerie advertising, excessive props, cluttered picnic setup, cartoon cotton, fluorescent brand color, oversharpened grass, fake depth of field, pasted background, studio grass backdrop, incorrect gravity, incorrect perspective",
 };
 
 const ENGLISH_SELLING_POINTS: Record<string, string> = {
@@ -390,14 +406,14 @@ const ENGLISH_ANGLES: Record<string, string> = {
 
 const ENGLISH_TONES: Record<string, string> = {
   "米色调": "Cream white, beige, light nude, warm natural light; high-key, low-saturation, low-contrast; warm, skin-friendly, sophisticated lifestyle atmosphere, healing, clean.",
-  "蓝色调": "Sky blue, ocean blue, pale blue, clean white, natural warm skin tone with cool environment; high-key, low-saturation, fresh, transparent, airy; fresh, safe, trustworthy, professional but not cold.",
+  "蓝色调": "Clear sky blue, pale blue, clean white, natural warm skin tone with a cool-toned environment; high-key, low-saturation, fresh, transparent, airy; fresh, safe, trustworthy, professional but not cold.",
 };
 
 const WEIGHT_CN = { low: "低", medium: "中", high: "高" } as const;
 const WEIGHT_EN = {
   low: "low influence: use only as a subtle secondary cue",
-  medium: "medium influence: clearly reference the visual direction without copying",
-  high: "high influence: strongly apply only abstract lighting, palette, tonality, depth, and framing principles; never copy recognizable content or exact layout",
+  medium: "medium influence: clearly reference the visual direction while respecting the restricted content boundary",
+  high: "high influence: strongly apply the referenced visual direction; never copy the subject, character identity, face, body, or garment design",
 } as const;
 
 export const PROMPT_REFINER_SYSTEM_INSTRUCTION = `
@@ -478,7 +494,7 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
     input.referenceImages.length
       ? `风格参考图：${(input.referenceImageWeights?.length
           ? input.referenceImageWeights.map((item) => `${item.name}（权重：${WEIGHT_CN[item.weight]}）`)
-          : input.referenceImages).join("、")}。权重只控制抽象摄影语言的影响强度；仅允许提取光影柔硬、色彩、影调、景深、留白节奏与一般取景原则。禁止复制参考图中的人物、服装、姿势、动作、裁切、背景、家具、道具、建筑、物体位置或可识别的具体构图；高权重也不得突破此边界。`
+          : input.referenceImages).join("、")}。权重控制风格参考的影响强度；可参考视觉风格、光影、色彩、影调、景深、留白、姿势、动作、裁切、机位、背景、家具、道具、建筑、物体位置与构图。禁止复制参考图中的主体、人物身份、脸、身体和服装设计；高权重也不得突破此边界。`
       : "未提供额外风格参考图。",
   ].join("\n");
 
@@ -530,7 +546,7 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
       ? `Character identity references: ${input.characterImages.join(", ")}. Preserve identity, facial features, hairstyle, and body proportions only.`
       : "No character reference was provided; use an unmistakably adult Asian woman aged 22–30 with natural features and healthy proportions.",
     input.referenceImageWeights?.length
-      ? `Style references: ${input.referenceImageWeights.map((item, index) => `Reference ${index + 1} '${item.name}' — ${WEIGHT_EN[item.weight]}`).join("; ")}. Extract only abstract lighting, palette, tonal contrast, depth, negative-space rhythm, and general framing principles. Never reproduce a reference subject, face, body, garment, pose, action, crop, camera placement, background, furniture, props, architecture, object placement, or exact composition. High weight never overrides this boundary.`
+      ? `Style references: ${input.referenceImageWeights.map((item, index) => `Reference ${index + 1} '${item.name}' — ${WEIGHT_EN[item.weight]}`).join("; ")}. The references may influence visual style, lighting, palette, tonal contrast, depth, negative-space rhythm, pose, action, crop, camera placement, background, furniture, props, architecture, object placement, and composition. Never reproduce a reference subject, character identity, face, body, or garment design. High weight never overrides this boundary.`
       : "No additional style reference was provided.",
   ].join("\n");
 
@@ -551,12 +567,14 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
     input.originalPrompt.trim()
       ? `[ADDITIONAL CREATIVE DIRECTION — ORIGINAL USER TEXT]\n${input.originalPrompt.trim()}`
       : "",
-    "[QUALITY FLOOR]\nProduct fidelity takes priority over creativity. The output must be a genuinely new photograph, not a near-duplicate or traced recreation of any style reference. Gravity, occlusion, perspective, lighting, anatomy, fabric behavior, furniture, and natural-environment relationships must remain physically credible.",
+    "[QUALITY FLOOR]\nProduct fidelity takes priority over creativity. Style references must never supply the subject, character identity, face, body, or garment design. Gravity, occlusion, perspective, lighting, anatomy, fabric behavior, furniture, and natural-environment relationships must remain physically credible.",
   ].filter(Boolean);
 
   const englishNegativePrompt = [
-    "near-duplicate of a style reference, copied reference composition, copied pose, copied crop, copied background, copied props, copied object placement, traced layout, minor, childlike face, ambiguous age, copied face, influencer face, plastic skin, waxy skin, excessive retouching, oily highlights, heavy makeup, seductive expression, erotic lingerie, transparent clothing, sexual pose, exaggerated chest, exaggerated buttocks, voyeuristic angle, distorted anatomy, extra limbs, extra fingers, missing fingers, fused fingers, twisted joints, incorrect gravity, incorrect perspective, hair clipping, garment clipping, product deformation, twisted waistband, incorrect leg openings, incorrect seams, melted fabric, wrong packaging proportions, gibberish text, low resolution, blur, noise, compression artifacts, excessive HDR, oversharpening, halos, banding, fake depth of field, excessive bokeh, fisheye, cropped head, cropped hands, cropped feet, watermark, incorrect logo, border, collage, cheap e-commerce look, obvious AI artifacts",
-    ...(scene?.negativePrompt ? ["Avoid the scene-specific failures defined in the Chinese display version."] : []),
+    "copied style-reference subject, copied character identity, copied face, copied body, copied garment design, minor, childlike face, ambiguous age, influencer face, plastic skin, waxy skin, excessive retouching, oily highlights, heavy makeup, seductive expression, erotic lingerie, transparent clothing, sexual pose, exaggerated chest, exaggerated buttocks, voyeuristic angle, distorted anatomy, extra limbs, extra fingers, missing fingers, fused fingers, twisted joints, incorrect gravity, incorrect perspective, hair clipping, garment clipping, product deformation, twisted waistband, incorrect leg openings, incorrect seams, melted fabric, wrong packaging proportions, gibberish text, low resolution, blur, noise, compression artifacts, excessive HDR, oversharpening, halos, banding, fake depth of field, excessive bokeh, fisheye, cropped head, cropped hands, cropped feet, watermark, incorrect logo, border, collage, cheap e-commerce look, obvious AI artifacts",
+    ...(scene?.negativePrompt
+      ? [ENGLISH_SCENE_NEGATIVES[scene.id] || "Avoid the scene-specific failures defined in the Chinese display version."]
+      : []),
     ...(noPeople ? ["person, people, human, model, body, body part, hand, hands, face, skin, human reflection, human-shaped mannequin"] : []),
   ].join(", ");
 
