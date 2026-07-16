@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Project, Task, ImageAsset, ReferenceImage } from "./types";
+import { Project, Task, ImageAsset, ReferenceImage, type GenerationFailure } from "./types";
 import SidebarParams from "./components/SidebarParams";
 import CanvasArea from "./components/CanvasArea";
 import TaskPanel from "./components/TaskPanel";
@@ -62,6 +62,22 @@ function getProjectImageAnalyses(project: Project): AssetAnalysis[] {
 }
 
 const TASK_HISTORY_STORAGE_LIMIT = 30;
+
+function getClientGenerationFailure(error: unknown): GenerationFailure {
+  const message = error instanceof Error ? error.message : "浏览器无法访问本地生图服务。";
+  return {
+    title: "本地生图服务连接失败",
+    message: "页面没有收到本地生图接口的有效响应。",
+    reason: message === "Failed to fetch" || message === "fetch failed"
+      ? "本地服务可能已停止、正在重启，或浏览器与服务端的连接被中断。"
+      : message,
+    suggestion: "请确认项目服务仍在运行并刷新页面；如果服务正常，再检查本机网络与代理。",
+    code: "LOCAL_SERVICE_UNREACHABLE",
+    stage: "request",
+    details: message,
+    retryable: true,
+  };
+}
 
 function persistWorkspaceState(projects: Project[], tasks: Task[], currentProjectId: string) {
   const compactTasks = serializeTasksWithoutImagePayloads(tasks.slice(0, TASK_HISTORY_STORAGE_LIMIT));
@@ -184,7 +200,8 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatingProgress, setGeneratingProgress] = useState(0);
   const [generatingLogs, setGeneratingLogs] = useState<string[]>([]);
-  const [generationError, setGenerationError] = useState("");
+  const [generationElapsedSeconds, setGenerationElapsedSeconds] = useState(0);
+  const [generationError, setGenerationError] = useState<GenerationFailure | null>(null);
   const [actualPromptPreviewEnglish, setActualPromptPreviewEnglish] = useState("");
   const [actualPromptPreviewChinese, setActualPromptPreviewChinese] = useState("");
   const [isPromptPreviewLoading, setIsPromptPreviewLoading] = useState(false);
@@ -194,6 +211,36 @@ export default function App() {
 
   // Status Alerts
   const [showSavedNotification, setShowSavedNotification] = useState(false);
+
+  useEffect(() => {
+    if (!isGenerating) return;
+    const startedAt = Date.now();
+    const announced = new Set<number>();
+    const progressTimer = window.setInterval(() => {
+      const elapsed = Math.max(1, Math.floor((Date.now() - startedAt) / 1000));
+      setGenerationElapsedSeconds(elapsed);
+      setGeneratingProgress(() => {
+        if (elapsed <= 5) return Math.min(32, 12 + elapsed * 4);
+        if (elapsed <= 15) return Math.min(54, 32 + Math.floor((elapsed - 5) * 2.2));
+        if (elapsed <= 45) return Math.min(75, 54 + Math.floor((elapsed - 15) * 0.7));
+        return Math.min(92, 75 + Math.floor((elapsed - 45) / 5));
+      });
+
+      const timedLogs: Record<number, string> = {
+        5: "参考图已提交，正在解析产品、人物与风格职责...",
+        15: "Gemini 正在执行图片合成，复杂参考图可能需要更长时间...",
+        30: "模型仍在渲染，请保持当前页面打开...",
+        60: "已等待超过 1 分钟，继续等待 Gemini 返回结果...",
+        120: "已等待超过 2 分钟，高清图片和多参考图通常耗时更久...",
+      };
+      const log = timedLogs[elapsed];
+      if (log && !announced.has(elapsed)) {
+        announced.add(elapsed);
+        setGeneratingLogs((current) => [...current, log]);
+      }
+    }, 1000);
+    return () => window.clearInterval(progressTimer);
+  }, [isGenerating]);
 
   // Load from LocalStorage
   useEffect(() => {
@@ -500,9 +547,11 @@ export default function App() {
   // Trigger main brand visual generation pipeline
   const handleGenerateBrandVisual = async () => {
     const generationProject = currentProject;
-    setGenerationError("");
+    let responseFailure: GenerationFailure | null = null;
+    setGenerationError(null);
     setIsGenerating(true);
     setGeneratingProgress(12);
+    setGenerationElapsedSeconds(0);
     setGeneratingLogs(["正在连接 Gemini 图片生成模型...", "正在安全上传参考图并应用图片角色约束..."]);
 
     try {
@@ -540,7 +589,22 @@ export default function App() {
         throw new Error(`服务响应格式错误 (${response.status} ${response.statusText})`);
       }
 
-      if (!response.ok) throw new Error(data?.error || "真实生图失败，请稍后重试。");
+      if (!response.ok) {
+        responseFailure = {
+          title: data?.title || "本次生成未完成",
+          message: data?.error || "Gemini 没有返回图片结果。",
+          reason: data?.reason || "服务端未能完成本次图片生成请求。",
+          suggestion: data?.suggestion || "请检查网络、模型权限、账户额度和参考图后重试。",
+          code: data?.code,
+          stage: data?.stage,
+          requestId: data?.requestId,
+          durationMs: data?.durationMs,
+          details: data?.details,
+          safetyRetryTriggered: Boolean(data?.safetyRetryTriggered),
+          retryable: data?.retryable !== false,
+        };
+        throw new Error(responseFailure.message);
+      }
       const generatedUrls = Array.isArray(data.results) ? data.results.map(String) : [];
       if (generatedUrls.length === 0) throw new Error("模型未返回图片结果。");
 
@@ -591,9 +655,9 @@ export default function App() {
       saveStateToLocalStorage(projects, updatedTasks);
     } catch (error) {
       console.error("Gemini image generation failed:", error);
-      setGenerationError(error instanceof Error ? error.message : "真实生图失败，请稍后重试。");
-      setGeneratingLogs((prev) => [...prev, "生图未完成，请检查 Gemini API 配置、模型权限或账户额度。"]);
-      alert(error instanceof Error ? error.message : "真实生图失败，请稍后重试。");
+      const failure = responseFailure || getClientGenerationFailure(error);
+      setGenerationError(failure);
+      setGeneratingLogs((prev) => [...prev, `生图未完成：${failure.title}`]);
       setIsGenerating(false);
     }
   };
@@ -800,6 +864,7 @@ export default function App() {
               project={currentProject}
               isGenerating={isGenerating}
               generatingProgress={generatingProgress}
+              generationElapsedSeconds={generationElapsedSeconds}
               generatingLogs={generatingLogs}
               generationError={generationError}
               onOpenEditor={(imageUrl, originalUrl) => setEditingTarget({ imageUrl, originalUrl })}

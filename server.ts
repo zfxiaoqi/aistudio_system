@@ -5,7 +5,7 @@ import { mkdir, readFile, writeFile } from "fs/promises";
 import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, type Part } from "@google/genai";
-import { fetch as undiciFetch, FormData as UndiciFormData, ProxyAgent } from "undici";
+import { fetch as undiciFetch, FormData as UndiciFormData, Agent, ProxyAgent } from "undici";
 import {
   type AssetAnalysis,
   compilePrompt,
@@ -298,8 +298,16 @@ async function requestGeminiImage(args: {
   assets: PromptImageInput[];
   aspectRatio: string;
   resolution: string;
+  signal: AbortSignal;
+  attemptId: string;
 }) {
   const model = process.env.GEMINI_IMAGE_MODEL || "gemini-3-pro-image";
+  // Every image-generation attempt owns an isolated dispatcher. Closing it in
+  // finally guarantees a safety-blocked attempt cannot keep a listener/socket
+  // alive or be reused by the refined retry.
+  const attemptDispatcher = OPENAI_PROXY_URL
+    ? new ProxyAgent(OPENAI_PROXY_URL)
+    : new Agent({ connections: 1, pipelining: 0 });
   const orderedAssets = orderGeminiReferences(args.assets);
   const parts: Array<Record<string, unknown>> = [{ text: `${args.prompt}\n\n${GEMINI_REFERENCE_BOUNDARY}` }];
   orderedAssets.forEach((asset, index) => {
@@ -318,65 +326,74 @@ async function requestGeminiImage(args: {
     text: GEMINI_FINAL_COMPLIANCE,
   });
 
-  const response = await undiciFetch(
-    `${GEMINI_API_BASE_URL}/models/${encodeURIComponent(model)}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-goog-api-key": process.env.GEMINI_API_KEY || "",
-      },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts }],
-        generationConfig: {
-          responseModalities: ["IMAGE"],
-          imageConfig: {
-            aspectRatio: args.aspectRatio,
-            imageSize: normalizeGeminiImageResolution(args.resolution),
-          },
+  try {
+    console.log("Gemini image attempt started", { attemptId: args.attemptId });
+    const response = await undiciFetch(
+      `${GEMINI_API_BASE_URL}/models/${encodeURIComponent(model)}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-goog-api-key": process.env.GEMINI_API_KEY || "",
         },
-      }),
-      signal: AbortSignal.timeout(240_000),
-      dispatcher: openAIProxyAgent,
-    },
-  );
+        body: JSON.stringify({
+          contents: [{ role: "user", parts }],
+          generationConfig: {
+            responseModalities: ["IMAGE"],
+            imageConfig: {
+              aspectRatio: args.aspectRatio,
+              imageSize: normalizeGeminiImageResolution(args.resolution),
+            },
+          },
+        }),
+        signal: AbortSignal.any([args.signal, AbortSignal.timeout(240_000)]),
+        dispatcher: attemptDispatcher,
+      },
+    );
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error(`Gemini API Error: ${response.status} ${response.statusText}`, errorText);
-    throw new Error(`Gemini API failed: ${response.status} - ${errorText.substring(0, 200)}`);
-  }
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`Gemini API Error: ${response.status} ${response.statusText}`, errorText);
+      throw new Error(`Gemini API failed: ${response.status} - ${errorText.substring(0, 200)}`);
+    }
 
-  const payload = await response.json() as {
-    candidates?: Array<{
-      finishReason?: string;
-      content?: { parts?: Array<{ text?: string; inlineData?: { data?: string; mimeType?: string }; inline_data?: { data?: string; mime_type?: string } }> };
-    }>;
-    promptFeedback?: { blockReason?: string; blockReasonMessage?: string };
-    error?: { message?: string; code?: number; status?: string };
-  };
-  if (!response.ok) {
-    const status = payload.error?.status ? ` (${payload.error.status})` : "";
-    throw new Error(`${payload.error?.message || `Gemini API 请求失败：${response.status}`}${status}`);
-  }
+    const payload = await response.json() as {
+      candidates?: Array<{
+        finishReason?: string;
+        content?: { parts?: Array<{ text?: string; inlineData?: { data?: string; mimeType?: string }; inline_data?: { data?: string; mime_type?: string } }> };
+      }>;
+      promptFeedback?: { blockReason?: string; blockReasonMessage?: string };
+      error?: { message?: string; code?: number; status?: string };
+    };
 
-  const allParts = payload.candidates?.flatMap((candidate) => candidate.content?.parts || []) || [];
-  const imagePart = allParts.find((part) => part.inlineData?.data || part.inline_data?.data);
-  const inlineData = imagePart?.inlineData || (imagePart?.inline_data
-    ? { data: imagePart.inline_data.data, mimeType: imagePart.inline_data.mime_type }
-    : undefined);
-  if (!inlineData?.data) {
-    const finishReasons = payload.candidates?.map((candidate) => candidate.finishReason).filter(Boolean).join(", ");
-    const modelText = allParts.map((part) => part.text?.trim()).filter(Boolean).join(" ");
-    const details = [
-      payload.promptFeedback?.blockReason,
-      payload.promptFeedback?.blockReasonMessage,
-      finishReasons,
-      modelText,
-    ].filter(Boolean).join("；");
-    throw new Error(`Gemini 图片模型未返回图片数据${details ? `：${details}` : "。"}`);
+    const allParts = payload.candidates?.flatMap((candidate) => candidate.content?.parts || []) || [];
+    const imagePart = allParts.find((part) => part.inlineData?.data || part.inline_data?.data);
+    const inlineData = imagePart?.inlineData || (imagePart?.inline_data
+      ? { data: imagePart.inline_data.data, mimeType: imagePart.inline_data.mime_type }
+      : undefined);
+    if (!inlineData?.data) {
+      const finishReasons = payload.candidates?.map((candidate) => candidate.finishReason).filter(Boolean).join(", ");
+      const modelText = allParts.map((part) => part.text?.trim()).filter(Boolean).join(" ");
+      const details = [
+        payload.promptFeedback?.blockReason,
+        payload.promptFeedback?.blockReasonMessage,
+        finishReasons,
+        modelText,
+      ].filter(Boolean).join("；");
+      throw new Error(`Gemini 图片模型未返回图片数据${details ? `：${details}` : "。"}`);
+    }
+    return { base64: inlineData.data, mimeType: inlineData.mimeType || "image/png", model };
+  } finally {
+    if (args.signal.aborted) {
+      await attemptDispatcher.destroy().catch(() => undefined);
+    } else {
+      await attemptDispatcher.close().catch(() => undefined);
+    }
+    console.log("Gemini image attempt listener closed", {
+      attemptId: args.attemptId,
+      aborted: args.signal.aborted,
+    });
   }
-  return { base64: inlineData.data, mimeType: inlineData.mimeType || "image/png", model };
 }
 
 function getImageMimeType(fileName: string) {
@@ -937,11 +954,214 @@ app.post("/api/gemini/prompt-preview", (req, res) => {
   }
 });
 
+type GeminiFailureStage = "preparing" | "generating" | "safety_retry";
+
+function inspectErrorChain(error: unknown) {
+  const messages: string[] = [];
+  const codes: string[] = [];
+  const names: string[] = [];
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const value = current as { message?: unknown; code?: unknown; name?: unknown; cause?: unknown };
+    if (typeof value.message === "string" && value.message.trim()) messages.push(value.message.trim());
+    if (typeof value.code === "string" && value.code.trim()) codes.push(value.code.trim());
+    if (typeof value.name === "string" && value.name.trim()) names.push(value.name.trim());
+    current = value.cause;
+  }
+
+  if (typeof error === "string" && error.trim()) messages.push(error.trim());
+  return {
+    messages: Array.from(new Set(messages)),
+    codes: Array.from(new Set(codes)),
+    names: Array.from(new Set(names)),
+  };
+}
+
+function classifyGeminiGenerationFailure(
+  error: unknown,
+  context: {
+    requestId: string;
+    startedAt: number;
+    stage: GeminiFailureStage;
+    safetyRetryTriggered: boolean;
+  },
+) {
+  const chain = inspectErrorChain(error);
+  const searchable = [...chain.messages, ...chain.codes, ...chain.names].join(" | ");
+  const lower = searchable.toLowerCase();
+  const durationMs = Date.now() - context.startedAt;
+  const base = {
+    requestId: context.requestId,
+    durationMs,
+    stage: context.stage,
+    safetyRetryTriggered: context.safetyRetryTriggered,
+    retryable: true,
+    details: chain.messages.join(" → ") || "未知错误",
+  };
+  const safetyPrefix = context.safetyRetryTriggered
+    ? "首次请求触发了 Gemini 内容安全策略，系统自动改写并重试；"
+    : "";
+
+  if (chain.codes.includes("UND_ERR_SOCKET")) {
+    return {
+      status: 502,
+      body: {
+        ...base,
+        code: OPENAI_PROXY_URL ? "GEMINI_PROXY_CONNECTION_CLOSED" : "GEMINI_CONNECTION_CLOSED",
+        title: "Gemini 连接中途断开",
+        error: OPENAI_PROXY_URL
+          ? "本机代理与 Gemini 的连接在传输过程中被关闭。"
+          : "与 Gemini 的网络连接在传输过程中被关闭。",
+        reason: `${safetyPrefix}${OPENAI_PROXY_URL ? "当前请求通过已配置的本机代理访问 Gemini，代理连接未能保持到图片返回。" : "远端连接未能保持到图片返回。"}`,
+        suggestion: "请确认本机代理运行正常、Google Gemini 域名可访问，然后重新生成；若连续发生，建议切换代理节点。",
+      },
+    };
+  }
+
+  if (chain.codes.includes("UND_ERR_CONNECT_TIMEOUT") || lower.includes("connect timeout")) {
+    return {
+      status: 504,
+      body: {
+        ...base,
+        code: "GEMINI_CONNECT_TIMEOUT",
+        title: "Gemini 连接超时",
+        error: "在规定时间内未能建立 Gemini 服务连接。",
+        reason: `${safetyPrefix}网络或代理未能及时连接到 Google Gemini 服务。`,
+        suggestion: "请检查网络和代理连接后重试；如果其他网站正常，可稍后再试或更换代理节点。",
+      },
+    };
+  }
+
+  if (lower.includes("econnrefused")) {
+    return {
+      status: 502,
+      body: {
+        ...base,
+        code: OPENAI_PROXY_URL ? "GEMINI_PROXY_UNAVAILABLE" : "GEMINI_CONNECTION_REFUSED",
+        title: OPENAI_PROXY_URL ? "本机代理未连接" : "Gemini 连接被拒绝",
+        error: OPENAI_PROXY_URL
+          ? "访问 Gemini 所需的本机代理当前没有接受连接。"
+          : "Gemini 服务拒绝了当前网络连接。",
+        reason: `${safetyPrefix}${OPENAI_PROXY_URL ? "已配置代理，但代理端口未运行或进程已经退出。" : "目标服务或网络链路拒绝建立连接。"}`,
+        suggestion: OPENAI_PROXY_URL
+          ? "请先启动本机代理并确认代理端口可用，然后重新生成。"
+          : "请检查网络、防火墙和 Gemini 服务状态后重试。",
+      },
+    };
+  }
+
+  if (
+    lower.includes("aborterror")
+    || lower.includes("timeouterror")
+    || lower.includes("the operation was aborted")
+    || lower.includes("headers timeout")
+  ) {
+    return {
+      status: 504,
+      body: {
+        ...base,
+        code: "GEMINI_RESPONSE_TIMEOUT",
+        title: "Gemini 返回超时",
+        error: "图片生成接口在规定时间内没有返回结果。",
+        reason: `${safetyPrefix}请求已经发出，但模型生成或响应传输超过了等待上限。`,
+        suggestion: "可降低生成张数或分辨率后重试；若持续超时，请检查代理稳定性和 Gemini 服务状态。",
+      },
+    };
+  }
+
+  if (lower.includes("image_safety") || lower.includes("safety")) {
+    return {
+      status: 400,
+      body: {
+        ...base,
+        retryable: false,
+        code: "GEMINI_SAFETY_BLOCKED",
+        title: "内容安全策略拦截",
+        error: "Gemini 未返回图片，因为提示词或参考图触发了内容安全策略。",
+        reason: context.safetyRetryTriggered
+          ? "首次请求与自动安全改写重试均未通过模型安全检查。"
+          : "当前提示词、人物呈现或参考图被模型判定为不适合生成。",
+        suggestion: "请减少容易引发误判的身体或服装描述，换用更明确的成年商业摄影表述，或逐张排查参考图。",
+      },
+    };
+  }
+
+  if (lower.includes("429") || lower.includes("resource_exhausted") || lower.includes("quota")) {
+    return {
+      status: 429,
+      body: {
+        ...base,
+        code: "GEMINI_RATE_LIMITED",
+        title: "Gemini 配额或频率受限",
+        error: "当前请求超过了 Gemini 的调用频率或账户配额。",
+        reason: "服务端返回了限流或资源额度不足信息。",
+        suggestion: "请稍后重试，并检查 Gemini 项目的额度、计费状态和频率限制。",
+      },
+    };
+  }
+
+  if (lower.includes("401") || lower.includes("403") || lower.includes("permission_denied") || lower.includes("unauthenticated")) {
+    return {
+      status: 403,
+      body: {
+        ...base,
+        retryable: false,
+        code: "GEMINI_AUTH_FAILED",
+        title: "Gemini 认证或权限失败",
+        error: "当前 API Key 无法访问所选 Gemini 图片模型。",
+        reason: "密钥无效、项目权限不足，或当前账户没有该模型的访问权限。",
+        suggestion: "请检查 GEMINI_API_KEY、模型名称和 Google 项目权限，修正后重启服务。",
+      },
+    };
+  }
+
+  if (lower.includes("fetch failed") || lower.includes("econnreset") || lower.includes("enotfound") || lower.includes("network")) {
+    return {
+      status: 502,
+      body: {
+        ...base,
+        code: "GEMINI_NETWORK_ERROR",
+        title: "Gemini 网络访问失败",
+        error: "服务端未能完成对 Gemini 图片接口的访问。",
+        reason: `${safetyPrefix}网络、DNS 或代理链路发生异常，底层请求未获得有效响应。`,
+        suggestion: "请检查网络与代理是否可访问 Google Gemini 服务，然后重新生成。",
+      },
+    };
+  }
+
+  return {
+    status: 502,
+    body: {
+      ...base,
+      code: "GEMINI_GENERATION_FAILED",
+      title: "Gemini 图片生成失败",
+      error: chain.messages[0] || "Gemini 生图失败。",
+      reason: `${safetyPrefix}Gemini 没有返回可用的图片结果。`,
+      suggestion: "请根据详细信息检查提示词、参考图、模型权限和网络状态后重试。",
+    },
+  };
+}
+
 app.post("/api/gemini/generate-images", async (req, res) => {
+  const requestId = randomUUID();
+  const startedAt = Date.now();
+  let failureStage: GeminiFailureStage = "preparing";
+  let safetyRetryTriggered = false;
+
   if (!process.env.GEMINI_API_KEY) {
     return res.status(503).json({
       error: "真实生图链路已接入，但本机尚未配置 GEMINI_API_KEY。请在 .env.local 中设置后重启服务。",
       code: "GEMINI_API_KEY_MISSING",
+      title: "Gemini API 尚未配置",
+      reason: "服务端没有读取到 GEMINI_API_KEY。",
+      suggestion: "请在 .env.local 中配置有效密钥并重启项目服务。",
+      stage: "preparing",
+      requestId,
+      durationMs: Date.now() - startedAt,
+      retryable: false,
     });
   }
 
@@ -960,29 +1180,48 @@ app.post("/api/gemini/generate-images", async (req, res) => {
     const model = process.env.GEMINI_IMAGE_MODEL || "gemini-3-pro-image";
 
     // Define generation function to make it retryable
-    const generateOne = async (prompt: string) => {
+    const generateOne = async (prompt: string, signal: AbortSignal, attemptId: string) => {
       return await requestGeminiImage({
         prompt,
         assets,
         aspectRatio: input.aspectRatio,
         resolution: input.resolution,
+        signal,
+        attemptId,
       });
     };
 
     for (let index = 0; index < imageCount; index += 1) {
+      failureStage = "generating";
       const prompt = buildGeminiGenerationPrompt(basePrompt, negativePrompt, index, imageCount, input.modelCount);
 
       let generated;
+      let activeAttemptController = new AbortController();
+      const initialAttemptId = `${requestId}:${index + 1}:initial`;
       try {
-        generated = await generateOne(prompt);
+        generated = await generateOne(prompt, activeAttemptController.signal, initialAttemptId);
       } catch (error) {
          if (error instanceof Error && error.message.includes("IMAGE_SAFETY")) {
-             console.log("IMAGE_SAFETY triggered, retrying with refined prompt...");
+             activeAttemptController.abort();
+             console.log("IMAGE_SAFETY triggered; initial listener closed before prompt refinement", {
+               attemptId: initialAttemptId,
+             });
+             safetyRetryTriggered = true;
+             failureStage = "safety_retry";
              const refinedPrompt = await refinePrompt(input, assets);
-             generated = await generateOne(buildGeminiGenerationPrompt(refinedPrompt, negativePrompt, index, imageCount, input.modelCount));
+             const retryAttemptId = `${requestId}:${index + 1}:safety-retry`;
+             activeAttemptController = new AbortController();
+             console.log("Starting isolated Gemini safety retry", { attemptId: retryAttemptId });
+             generated = await generateOne(
+               buildGeminiGenerationPrompt(refinedPrompt, negativePrompt, index, imageCount, input.modelCount),
+               activeAttemptController.signal,
+               retryAttemptId,
+             );
          } else {
              throw error;
          }
+      } finally {
+        activeAttemptController.abort();
       }
 
       if (!generated) {
@@ -1010,27 +1249,19 @@ app.post("/api/gemini/generate-images", async (req, res) => {
       promptConfigVersion: compiled.configVersion,
       selectedPromptFragments: compiled.selectedFragments,
       promptWarnings: compiled.warnings,
+      requestId,
+      durationMs: Date.now() - startedAt,
+      safetyRetryTriggered,
     });
   } catch (error) {
     console.error("Gemini image generation failed:", error);
-    const message = error instanceof Error ? error.message : "Gemini 生图失败。";
-
-    // Check for specific error types in the message and pass them through
-    const errorResponse: { error: string, details?: string } = { error: message, details: message };
-
-    // Check if the error response might be HTML (e.g., from a 403 or 502)
-    if (message.includes("Unexpected token '<'")) {
-       return res.status(502).json({ error: "Gemini API 服务暂时不可用或认证失败。", details: message });
-    }
-    // Check for rate limit errors
-    if (message.includes("429")) {
-       return res.status(429).json({ error: "API 调用频率过高，请稍后再试或检查您的 Gemini API 配额。", details: message });
-    }
-    // Check for safety filter errors
-    if (message.includes("IMAGE_SAFETY")) {
-       return res.status(400).json({ error: "由于内容安全策略，此次生成被拦截，请尝试修改提示词或参考图。", details: message });
-    }
-    return res.status(502).json(errorResponse);
+    const classified = classifyGeminiGenerationFailure(error, {
+      requestId,
+      startedAt,
+      stage: failureStage,
+      safetyRetryTriggered,
+    });
+    return res.status(classified.status).json(classified.body);
   }
 });
 

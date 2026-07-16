@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Task, Project } from "../types";
+import { Task, Project, type GenerationFailure } from "../types";
 import { ZoomIn, Edit, Download, Info, Sparkles, RefreshCw, Layers, Check, Copy, ChevronLeft, ChevronRight, X, Maximize2, Minimize2, CheckCircle2 } from "lucide-react";
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
@@ -9,8 +9,9 @@ interface CanvasAreaProps {
   project: Project;
   isGenerating: boolean;
   generatingProgress: number;
+  generationElapsedSeconds: number;
   generatingLogs: string[];
-  generationError: string;
+  generationError: GenerationFailure | null;
   onOpenEditor: (imageUrl: string, originalUrl: string) => void;
   onRecreateSimilar: (url: string) => void;
   onSetAsReference: (url: string) => void;
@@ -21,12 +22,26 @@ export default function CanvasArea({
   project,
   isGenerating,
   generatingProgress,
+  generationElapsedSeconds,
   generatingLogs,
   generationError,
   onOpenEditor,
   onRecreateSimilar,
   onSetAsReference
 }: CanvasAreaProps) {
+  const formatElapsed = (seconds: number) => {
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`;
+  };
+  const waitingMessage = generationElapsedSeconds < 5
+    ? "正在建立安全连接"
+    : generationElapsedSeconds < 15
+    ? "正在上传并解析参考图"
+    : generationElapsedSeconds < 45
+    ? "Gemini 正在合成图片"
+    : "模型仍在渲染，请保持页面打开";
+
   // Immersive preview state
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [zoomLevel, setZoomLevel] = useState(100);
@@ -145,11 +160,28 @@ export default function CanvasArea({
       )}
 
       {generationError && !isGenerating && (
-        <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700 flex items-start gap-2">
-          <X className="w-4 h-4 shrink-0 mt-0.5" />
-          <div>
-            <p className="font-bold">本次生成未完成</p>
-            <p className="mt-1 leading-relaxed select-text">{generationError}</p>
+        <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-4 text-xs text-red-800 flex items-start gap-3">
+          <X className="w-4 h-4 shrink-0 mt-0.5 text-red-600" />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="font-bold text-sm">{generationError.title}</p>
+              {generationError.code && (
+                <span className="rounded-md bg-red-100 px-2 py-0.5 font-mono text-[9px] text-red-700">
+                  {generationError.code}
+                </span>
+              )}
+            </div>
+            <p className="mt-1.5 font-semibold leading-relaxed select-text">{generationError.message}</p>
+            <div className="mt-3 grid gap-2 text-[11px] leading-relaxed">
+              <p><span className="font-bold">失败原因：</span>{generationError.reason}</p>
+              <p><span className="font-bold">处理建议：</span>{generationError.suggestion}</p>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-red-200/70 pt-2 font-mono text-[9px] text-red-500">
+              {generationError.stage && <span>阶段：{generationError.stage}</span>}
+              {typeof generationError.durationMs === "number" && <span>耗时：{formatElapsed(Math.round(generationError.durationMs / 1000))}</span>}
+              {generationError.requestId && <span className="select-text">请求编号：{generationError.requestId}</span>}
+              {generationError.safetyRetryTriggered && <span>已执行安全改写重试</span>}
+            </div>
           </div>
         </div>
       )}
@@ -245,9 +277,11 @@ export default function CanvasArea({
             {/* Slider bar */}
             <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden relative border border-black/5 shadow-inner">
               <div
-                className="bg-blue-600 h-full rounded-full transition-all duration-300"
+                className="bg-gradient-to-r from-blue-500 via-blue-600 to-cyan-400 h-full rounded-full transition-all duration-1000 ease-out relative overflow-hidden"
                 style={{ width: `${generatingProgress}%` }}
-              />
+              >
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/35 to-transparent animate-pulse" />
+              </div>
             </div>
 
             {/* Process Logging Terminal lines */}
@@ -261,7 +295,7 @@ export default function CanvasArea({
             </div>
             
             <p className="text-[10px] text-gray-400 text-center">
-              * 正基于您所选的参考图控制构图与光线，预计完成还需 5 秒
+              * {waitingMessage} · 已等待 {formatElapsed(generationElapsedSeconds)}
             </p>
           </div>
 

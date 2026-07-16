@@ -70,6 +70,20 @@ export interface Task {
   videos: { [imageUrl: string]: { url: string; motion: string; duration: number; strength: string }[] };
 }
 
+export interface GenerationFailure {
+  title: string;
+  message: string;
+  reason: string;
+  suggestion: string;
+  code?: string;
+  stage?: string;
+  requestId?: string;
+  durationMs?: number;
+  details?: string;
+  safetyRetryTriggered?: boolean;
+  retryable?: boolean;
+}
+
 export interface Project {
   id: string;
   name: string;
