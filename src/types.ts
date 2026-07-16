@@ -42,6 +42,7 @@ export interface Task {
   createdAt: string;
   productImages: string[]; // URLs or base64 of uploaded product files
   characterImages: string[]; // URLs of character files
+  modelCount: number;
   keepCharacter: boolean;
   referenceImages: { url: string; weight: 'low' | 'medium' | 'high' }[];
   visualType: 'A' | 'B' | 'C';
@@ -76,6 +77,7 @@ export interface Project {
   lastSavedAt: string;
   productImages: ImageAsset[];
   characterImages: ImageAsset[];
+  modelCount: number;
   referenceImages: ReferenceImage[];
   visualType: 'A' | 'B' | 'C';
   scene?: string;

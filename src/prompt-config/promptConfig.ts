@@ -21,6 +21,7 @@ export interface PromptCompileInput {
   resolution: string;
   aspectRatio: string;
   imageCount: number;
+  modelCount: number;
   productImages: string[];
   characterImages: string[];
   referenceImages: string[];
@@ -112,10 +113,10 @@ export const SCENE_OPTIONS: Record<VisualTypeId, PromptOption[]> = {
       description: "蓝白海岸与轻旅行感",
       recommendedTone: "蓝色调",
       prompt:
-        "真实自然海岸，开阔浅蓝天空、清澈海面、细碎白浪与干净礁石或浅水沙滩；天空占画面约45%–70%，海平线位于下方1/4–2/5。人物处于迎风慢走、望海或自然同行的抓拍状态，发丝与轻薄衣摆风向一致。蓝白低饱和、自然暖肤色、前中远三层空间和大面积文案留白，呈现轻松、洁净、呼吸感、旅行感与自然生命力。",
+        "蓝白主调、清透自然光、海边礁石、开阔天空、大面积留白、轻旅行感、真实笑容、自然风感、清爽亚裔女性、白色浴巾包裹、浅蓝衬衫、行李箱出行符号、轻松出发、干净即自在、治愈松弛、真实商业摄影。",
       negativePrompt:
         "旅游打卡照，游客合影，商业假笑，椰树度假风，泳圈，堆叠遮阳伞，巨浪，风暴，戏剧性晚霞，金色夕阳，过饱和蓝天，荧光海水，虚假蓝幕，棚拍海景，背景贴图，海平线倾斜",
-      version: 1,
+      version: 2,
     },
     {
       id: "居家松弛",
@@ -123,10 +124,10 @@ export const SCENE_OPTIONS: Record<VisualTypeId, PromptOption[]> = {
       description: "日照感与真实生活温度",
       recommendedTone: "米色调",
       prompt:
-        "采光良好的现代都市住宅，以暖白哑光墙面、浅橡木地板、大窗、奶油白半透薄纱帘和圆角低饱和家具构成阳光居家感。人物正在阅读、喝水、靠坐、伸展或整理行李，肩颈放松、动作可持续，空间整洁但保留少量真实生活痕迹。使用有明确方向的4800K–5600K自然窗光，暖而不黄，表现日照感、松弛感、洁净感、呼吸感与自然生命力。",
+        "奶油米白、暖白自然光、原木色地板、浅色墙面、纱帘落地窗、亚洲女性、居家松弛、生活感、朋友陪伴感、柔软亲肤、不费力高级感、自然笑容、身体舒展、低饱和配色、真实商业摄影。",
       negativePrompt:
         "深色豪宅，黑灰工业风，冷蓝办公室，复古宫廷，浓重侘寂，杂乱背景，廉价出租屋，厚重深色窗帘，红木家具，镜面大理石，过多绿植，纯白无生活感影棚，正面环形灯，全画面黄滤镜",
-      version: 1,
+      version: 2,
     },
     {
       id: "米色自在",
@@ -134,10 +135,10 @@ export const SCENE_OPTIONS: Record<VisualTypeId, PromptOption[]> = {
       description: "柔光棚拍与亲肤质感",
       recommendedTone: "米色调",
       prompt:
-        "生活化极简柔光棚拍，奶油米白、浅杏和自然肤色为主；空间使用圆弧结构、柔性几何装置和大面积留白，以圆润、包裹、安全、无攻击性的视觉语言放大柔软亲肤。人物自然微笑、身体放松，产品处于视觉中心。使用均匀柔光、低对比度、高明度、自然皮肤过渡和轻柔阴影，呈现高级护肤广告般的洁净与亲肤质感。",
+        "奶油米白、柔光棚拍、极简空间、圆弧包裹、自然女性、轻松笑容、贴身舒适、高级生活方式、低饱和、真实商业摄影。",
       negativePrompt:
         "强轮廓光，冷科技光，黑白高反差，商业硬棚光，复杂家居，花朵堆叠，少女化元素，美妆广告感，冷漠时尚脸，性感内衣展示",
-      version: 1,
+      version: 2,
     },
     {
       id: "蓝色洁净",
@@ -145,10 +146,10 @@ export const SCENE_OPTIONS: Record<VisualTypeId, PromptOption[]> = {
       description: "浅蓝棚拍与专业洁净感",
       recommendedTone: "蓝色调",
       prompt:
-        "单色浅天蓝极简棚拍，白色或浅蓝服装，高明度、低饱和、空气感强；不依赖复杂场景和道具，让人物状态、产品贴身感和品牌蓝白氛围成为视觉中心。人物干净、自信、轻松并带轻微动态，贴身但不性感、舒适但不松垮。整体专业、年轻、可信赖，但不冰冷、不医疗化。",
+        "浅蓝洁净棚拍、蓝白主调、极简背景、清爽空气感、单人轻动态、双人前后对照、正反面版型展示、后臀完整包裹、竖纹纯棉肌理、局部细节特写、轻拉腿口弹性、高弹橡筋、柔软亲肤、不勒不夹、不卡裆、双层底裆、EO灭菌、10A抗菌、A类母婴级、安全温和、真实商业摄影。",
       negativePrompt:
         "冰冷实验室，医疗器械感，冷科技蓝，高饱和品牌蓝，复杂道具，家居杂物，硬质塑料背景，僵硬证件照，性感时尚大片",
-      version: 1,
+      version: 2,
     },
   ],
   B: [
@@ -158,10 +159,10 @@ export const SCENE_OPTIONS: Record<VisualTypeId, PromptOption[]> = {
       description: "真实动作证明柔弹包裹",
       recommendedTone: "米色调",
       prompt:
-        "米白墙面、浅木地板、自然窗光与简洁家具构成居家轻运动环境，可使用哑光浅蓝柔性球体作为柔软支撑和回弹隐喻。通过靠球伸展、扶椅转身、轻拉腰头、自然回身或可信的躺卧展示，证明产品柔软亲肤、腰头有弹力、臀部立体包裹、久穿不勒且活动不移位。重点检查腰头平整、裤脚不卷边、后片覆盖完整、竖纹面料清晰，以及动作中产品结构稳定。",
+        "米白居家、自然窗光、轻运动伸展、柔性蓝色球体、真实亚洲女性、身体自然舒展、腰头拉伸、臀部立体包裹、三分之四背面、细腻竖纹面料、裤脚平整、不勒不夹、动作不移位、柔软回弹、日常生活感、真实商业摄影。",
       negativePrompt:
         "专业健身房，硬核瑜伽，竞技运动，汗流浃背，夸张拉伸，肌肉强化，刻意臀部展示，窥视角度，高难度后弯，产品被拉薄，腰头卷边，裤脚错位",
-      version: 1,
+      version: 2,
     },
     {
       id: "蓝色洁净功能证据系统",
@@ -169,30 +170,114 @@ export const SCENE_OPTIONS: Record<VisualTypeId, PromptOption[]> = {
       description: "蓝白棚拍证明穿着性能",
       recommendedTone: "蓝色调",
       prompt:
-        "浅蓝洁净极简棚拍，以真实穿着状态、正反面、局部细节、双人对照或轻拉伸动作建立功能证据。清晰展示穿着轻盈、材质柔软、亲肤不刺激、包裹完整、不勒不夹；产品轮廓、腰头、裤脚、包边、竖纹纯棉肌理保持准确，适合电商详情页、卖点图和首焦功能图。",
+        "浅蓝洁净棚拍、蓝白主调、极简背景、清爽空气感、单人轻动态、双人前后对照、正反面版型展示、后臀完整包裹、竖纹纯棉肌理、局部细节特写、轻拉腿口弹性、高弹橡筋、柔软亲肤、功能证据化、电商专业感。",
       negativePrompt:
         "冰冷医疗棚拍，夸张实验演示，硬塑料材质，过度拉扯，产品变形，低俗局部裁切，性感凝视，遮挡产品，错误正反面结构",
-      version: 1,
+      version: 2,
     },
   ],
   C: [],
 };
 
 export const SELLING_POINT_OPTIONS: PromptOption[] = [
-  { id: "吸水", label: "吸水", prompt: "以可信的局部演示表现吸水后仍保持干爽、舒适，避免夸张液体特效。", version: 1 },
-  { id: "透气", label: "透气", prompt: "以轻盈空气感、清晰细腻的面料孔隙与柔和流动感表达透气，避免虚假科技粒子。", version: 1 },
-  { id: "弹力拉伸", label: "弹力拉伸", prompt: "通过真实克制的轻拉伸动作证明弹性，拉伸幅度可信，结构不变形，松开后自然回弹。", version: 1 },
-  { id: "不起球", label: "不起球", prompt: "使用面料近景展示表面干净平整、纤维细腻且无起球，保持真实织物质感。", version: 1 },
-  { id: "不掉絮", label: "不掉絮", prompt: "以洁净面料表面和清楚纤维边缘证明不掉絮，画面中不出现飞散纤维。", version: 1 },
-  { id: "灭菌", label: "灭菌", prompt: "以洁净、安全、可信赖的视觉气质承接EO灭菌、10A抗菌或无菌级信息，不使用冰冷医疗器械语言。", version: 1 },
-  { id: "A类母婴级", label: "A类母婴级", prompt: "以温和、安全、低刺激、柔软亲肤的视觉表达承接婴幼儿用品标准，不使用卡通母婴化场景。", version: 1 },
-  { id: "便携不占行李", label: "便携不占行李", prompt: "通过整齐折叠后的小体积与真实旅行收纳关系，展示轻便、易携带、不占行李空间。", version: 1 },
-  { id: "亲肤柔软不扎", label: "亲肤柔软不扎", prompt: "通过柔和皮肤接触、自然贴合和细腻棉感表达柔软亲肤，边缘不过度压迫皮肤。", version: 1 },
-  { id: "透气不闷汗", label: "透气不闷汗", prompt: "以清爽、轻盈、干爽的穿着状态表达透气不闷汗，避免汗液或运动广告感。", version: 1 },
-  { id: "爽滑不粘腻", label: "爽滑不粘腻", prompt: "通过顺滑但不发亮的面料质感、自然褶皱和轻松贴肤状态表达不粘腻。", version: 1 },
-  { id: "不夹臀", label: "不夹臀", prompt: "采用三分之四背面或自然转身，展示后片覆盖完整、不上移、不夹臀、左右对称。", version: 1 },
-  { id: "3D人体工学版型", label: "3D人体工学版型", prompt: "通过正面、侧面和背面的可信版型展示，证明立体剪裁、自然贴合和完整包裹。", version: 1 },
-  { id: "大码包容", label: "大码包容", prompt: "通过不同真实体型的自然穿着状态展示包容性，避免不真实瘦身、勒痕或夸张身材对比。", version: 1 },
+  {
+    id: "吸水",
+    label: "吸水",
+    prompt:
+      "面料表面滴落浅色透明液体后被快速吸收，表层不留水渍积聚，贴肤面保持干爽；液体自然滴落接触面料，面料快速吸收下渗，反面贴肤面保持相对干燥，不反渗，画面干净有呼吸感，保持品牌高级商业摄影气质。",
+    version: 2,
+  },
+  {
+    id: "透气",
+    label: "透气",
+    prompt:
+      "面料在背光下展示细密透气纹理与孔隙，面料层次感与空气感同时呈现，画面干净通透有呼吸感；面料被轻吹或自然气流吹动呈现轻盈飘动感，可配合蒸汽雾气示意空气透过面料，湿热气可排出，皮肤表面不积热。",
+    version: 2,
+  },
+  {
+    id: "弹力拉伸",
+    label: "弹力拉伸",
+    prompt:
+      "腰头、裤脚、面料的延展与回弹过程清晰可见，拉伸幅度真实可信，不变形不开裂，拉伸后松手面料自然回缩；双手轻拉腰头展示延展幅度，双手拉伸面料一角展示回弹过程，拉伸动作手部姿态自然。",
+    version: 2,
+  },
+  {
+    id: "不起球",
+    label: "不起球",
+    prompt:
+      "面料表面纹理清晰无起球颗粒，面料在光照下表面干净无杂质；面料表面特写纹理清晰无起球颗粒，可配合摩擦动作如手轻抚面料表面依然平整。",
+    version: 2,
+  },
+  {
+    id: "不掉絮",
+    label: "不掉絮",
+    prompt:
+      "面料纤维结构紧密稳定，画面干净无飞纤维；面料在抖动拉扯状态下周围无飞絮飘落，面料表面在强光下特写无松散纤维，可配合深色背景板反衬。",
+    version: 2,
+  },
+  {
+    id: "灭菌",
+    label: "灭菌",
+    prompt:
+      "洁净安全的视觉气质承接EO灭菌、10A抗菌、无菌级标准，产品展开在洁净浅色背景上呈现无菌感；产品包装特写展示灭菌标识认证信息，产品展开在洁净浅色背景上呈现无菌感。",
+    version: 2,
+  },
+  {
+    id: "A类母婴级",
+    label: "A类母婴级",
+    prompt:
+      "面料在柔光下展现细腻纹理无刺激感，柔和安全低刺激；面料特写呈现柔软温和触感，可配合柔和婴儿肌肤色调暖光氛围，产品与简洁的A类标识认证符号配合。",
+    version: 2,
+  },
+  {
+    id: "便携不占行李",
+    label: "便携不占行李",
+    prompt:
+      "产品折叠后体积小适合旅行携带，多件产品折叠后整齐排列体现小巧，保持品牌旅行生活方式高级感；产品折叠过程展示展开折叠收纳，折叠后产品与行李箱旅行包手包的尺寸对比。",
+    version: 2,
+  },
+  {
+    id: "亲肤柔软不扎",
+    label: "亲肤柔软不扎",
+    prompt:
+      "面料采用柔软纤维工艺，表面无硬质纤维刺感，接触皮肤时温和无刺激；面料轻贴皮肤如手臂腰部呈现自然贴合感，面料在指尖轻抚下展现柔软状态，可配合手部动作轻揉。",
+    version: 2,
+  },
+  {
+    id: "透气不闷汗",
+    label: "透气不闷汗",
+    prompt:
+      "面料透气结构使湿热气可排出汗液不积聚，皮肤表面保持清爽，清爽感通过光感与色调传达；面料在背光下展示透气孔隙结构，可配合轻吹自然气流面料轻盈飘动，面料贴肤状态呈现清爽。",
+    version: 2,
+  },
+  {
+    id: "爽滑不粘腻",
+    label: "爽滑不粘腻",
+    prompt:
+      "面料表面爽滑处理，接触皮肤时不黏附，湿热环境下不粘身，穿脱顺滑无阻力；面料在指尖滑过呈现顺滑质感，面料轻贴皮肤后自然滑落展现不粘特性，面料在光线下展现细腻光泽感。",
+    version: 2,
+  },
+  {
+    id: "不夹臀",
+    label: "不夹臀",
+    prompt:
+      "产品采用合理后片剪裁，臀部覆盖完整动作中后片不上移，后片左右对称弧线自然贴合臀部；三分之四背面视角展示后片完整覆盖，自然动作如行走弯腰坐下后后片仍稳定。",
+    version: 2,
+  },
+  {
+    id: "3D人体工学版型",
+    label: "3D人体工学版型",
+    prompt:
+      "产品采用3D立体剪裁，正面背面侧面弧线贴合人体曲线，不平铺不堆褶不空荡；正面视角展示腰部裆部裤脚对称性，背面视角展示后片覆盖臀线弧度，侧面视角展示腰臀过渡裤脚弧线。",
+    version: 2,
+  },
+  {
+    id: "大码包容",
+    label: "大码包容",
+    prompt:
+      "产品版型设计包容不同体型，弹力与剪裁适应不同身材，大码身材也能稳定包裹，不勒肉不空荡不夹臀；不同体型的模特穿着同一产品均呈现贴合舒适，大码模特展示产品包裹完整不勒肉。",
+    version: 2,
+  },
 ];
 
 export const SHOT_SCALE_OPTIONS: PromptOption[] = [
@@ -215,17 +300,17 @@ export const TONE_OPTIONS: PromptOption[] = [
     id: "米色调",
     label: "米色调",
     prompt:
-      "奶油白、米白、米杏、浅木和自然暖肤色为主，高明度、低饱和、低对比；画面温暖、安心、亲肤、有治愈感，但白色不发黄发脏。",
-    negativePrompt: "浓黄滤镜，脏白墙，高饱和暖色，厚重暗调",
-    version: 1,
+      "奶油白、米白、米杏、浅裸色、暖白自然光为主，高明度、低饱和、低对比；温暖、亲肤、具高级生活方式感、治愈感；白色不发黄漂蓝、绿色仅作点缀、品牌蓝仅出现于识别。",
+    negativePrompt: "高饱和艳色，脏灰色，网红滤镜色，厚重暗调，冷科技光，黑白高反差，商业硬棚光，白色漂蓝，发黄发脏",
+    version: 2,
   },
   {
     id: "蓝色调",
     label: "蓝色调",
     prompt:
-      "天空蓝、海水蓝、浅天蓝、洁净白和自然暖肤色形成冷暖平衡；高明度、低饱和、清爽通透，专业但不冰冷、不医疗化。",
-    negativePrompt: "高饱和科技蓝，脏灰，青橙调色，网红滤镜，冰冷实验室感",
-    version: 1,
+      "天空蓝、海水蓝、浅天蓝、洁净白为主，高明度、低饱和、清爽、通透、空气感强；清爽、安全、值得信赖、干净专业但不冰冷；人物肤色自然偏暖，环境清爽偏冷，冷暖平衡。",
+    negativePrompt: "高饱和艳色，脏灰色，网红滤镜色，厚重暗调，冷科技蓝，医疗器械感，冰冷实验室感，强轮廓光，冷科技光，黑白高反差，商业硬棚光",
+    version: 2,
   },
 ];
 
@@ -263,12 +348,12 @@ const ENGLISH_VISUAL_TYPE: Record<VisualTypeId, string> = {
 };
 
 const ENGLISH_SCENES: Record<string, string> = {
-  "海边自在": "A natural open coastline with pale-blue sky, clear water, fine white waves, clean rocks or shallow beach; low-saturation blue and white, warm natural skin, layered depth, wind-consistent hair and clothing, generous copy space, relaxed travel energy.",
-  "居家松弛": "A bright modern urban home with warm-white matte walls, light oak flooring, large windows, sheer cream curtains, rounded low-saturation furniture, directional natural window light, and a relaxed lived-in atmosphere.",
-  "米色自在": "A lifestyle-oriented minimalist soft-light studio in cream, beige, pale apricot, and natural skin tones, with rounded structures, soft geometry, generous negative space, low contrast, and a clean skin-care-campaign quality.",
-  "蓝色洁净": "A minimal pale-sky-blue studio with white or light-blue wardrobe, high-key low-saturation color, clean airiness, confident natural movement, and a professional but non-clinical atmosphere.",
-  "居家柔弹与立体包裹": "A light home exercise setting with off-white walls, pale wood, natural window light, and simple furniture. Use credible stretching, turning, sitting, or reclining actions to demonstrate softness, elasticity, full coverage, stable fit, flat waistband, and non-rolling leg openings.",
-  "蓝色洁净功能证据系统": "A clean pale-blue studio evidence system using authentic wearing states, front/back views, details, restrained stretch, or comparison compositions to prove lightweight comfort, softness, complete coverage, and stable fit.",
+  "海边自在": "Blue-and-white tone, fresh natural light, seaside rocks, open sky, generous negative space, light-travel energy, genuine smiles, natural breeze, fresh-looking Asian woman, wrapped in a white bath towel, light blue shirt, suitcase as travel symbol, easy departure, clean and effortless, healing relaxation, real commercial photography.",
+  "居家松弛": "Creamy beige, warm white natural light, wooden flooring, light walls, sheer curtains and floor-to-ceiling windows, Asian woman, home relaxation, daily life feeling, sense of companionship, soft and skin-friendly, effortless sophistication, natural smiles, relaxed body posture, low-saturation color palette, real commercial photography.",
+  "米色自在": "Creamy beige, soft light studio, minimalist space, rounded structures, natural woman, relaxed smiles, skin-friendly comfort, high-end lifestyle, low saturation, real commercial photography.",
+  "蓝色洁净": "Pale blue clean studio, blue-and-white tone, minimalist background, fresh airy feeling, single-person light motion, dual-person front-and-back comparison, product structure demonstration, full rear coverage, ribbed cotton texture, partial detail close-up, light stretch at leg opening, high-elastic rubber band, soft and skin-friendly, non-binding/non-pinching, no wedgie, double-layered crotch, EO sterilization, 10A antibacterial, A-class maternal/infant level, safe and gentle, real commercial photography.",
+  "居家柔弹与立体包裹": "Creamy beige home, natural window light, light exercise stretching, soft blue spheres, real Asian woman, natural body stretching, waistband stretching, 3D hip coverage, 3/4 rear view, fine ribbed fabric texture, flat leg openings, non-binding/non-pinching, no shifting, soft resilience, daily life feeling, real commercial photography.",
+  "蓝色洁净功能证据系统": "Pale blue clean studio, blue-and-white tone, minimalist background, fresh airy feeling, single-person light motion, dual-person front-and-back comparison, product structure demonstration, full rear coverage, ribbed cotton texture, partial detail close-up, light stretch at leg opening, high-elastic rubber band, soft and skin-friendly, functional evidence, e-commerce professional feeling.",
 };
 
 const ENGLISH_SELLING_POINTS: Record<string, string> = {
@@ -304,15 +389,15 @@ const ENGLISH_ANGLES: Record<string, string> = {
 };
 
 const ENGLISH_TONES: Record<string, string> = {
-  "米色调": "Cream white, warm off-white, beige, pale apricot, light wood, and natural warm skin; high-key, low-saturation, low-contrast, warm but never yellow or dirty.",
-  "蓝色调": "Sky blue, ocean blue, pale blue, clean white, and natural warm skin in a high-key low-saturation balance; fresh, transparent, professional, non-clinical.",
+  "米色调": "Cream white, beige, light nude, warm natural light; high-key, low-saturation, low-contrast; warm, skin-friendly, sophisticated lifestyle atmosphere, healing, clean.",
+  "蓝色调": "Sky blue, ocean blue, pale blue, clean white, natural warm skin tone with cool environment; high-key, low-saturation, fresh, transparent, airy; fresh, safe, trustworthy, professional but not cold.",
 };
 
 const WEIGHT_CN = { low: "低", medium: "中", high: "高" } as const;
 const WEIGHT_EN = {
   low: "low influence: use only as a subtle secondary cue",
   medium: "medium influence: clearly reference the visual direction without copying",
-  high: "high influence: strongly follow composition, lighting, color, and mood while preserving product and identity rules",
+  high: "high influence: strongly apply only abstract lighting, palette, tonality, depth, and framing principles; never copy recognizable content or exact layout",
 } as const;
 
 export const PROMPT_REFINER_SYSTEM_INSTRUCTION = `
@@ -343,6 +428,7 @@ export function getRecommendedTone(visualType: VisualTypeId, scene?: string) {
 }
 
 export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage {
+  const noPeople = input.modelCount === 0;
   const fragments: SelectedPromptFragment[] = [];
   const negativeFragments: string[] = [COMMON_NEGATIVE_PROMPT];
   const warnings: string[] = [];
@@ -384,13 +470,15 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
     input.productImages.length
       ? `产品主参考图：${input.productImages.join("、")}。仅用于锁定产品外观与包装结构。`
       : "未提供产品主参考图。",
-    input.characterImages.length
+    noPeople
+      ? "已选择0人：画面中不得出现人物、人体部位、手、脸、人物倒影或人形模特；采用产品静物、平铺、悬挂、装置或环境陈列等无人摄影方式。"
+      : input.characterImages.length
       ? `人物参考图：${input.characterImages.join("、")}。仅用于人物身份、五官、发型与体型一致性。`
       : "未提供人物参考图，使用巴迪高默认成年亚洲女性规范。",
     input.referenceImages.length
       ? `风格参考图：${(input.referenceImageWeights?.length
           ? input.referenceImageWeights.map((item) => `${item.name}（权重：${WEIGHT_CN[item.weight]}）`)
-          : input.referenceImages).join("、")}。权重用于控制风格影响强度；仅影响构图、光影、色彩与氛围，不得改变产品结构或人物身份。`
+          : input.referenceImages).join("、")}。权重只控制抽象摄影语言的影响强度；仅允许提取光影柔硬、色彩、影调、景深、留白节奏与一般取景原则。禁止复制参考图中的人物、服装、姿势、动作、裁切、背景、家具、道具、建筑、物体位置或可识别的具体构图；高权重也不得突破此边界。`
       : "未提供额外风格参考图。",
   ].join("\n");
 
@@ -413,7 +501,9 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
     "【品牌与任务】\n巴迪高高级商业视觉生成。真实相机成像、自然生活抓拍感与高级品牌精致度并存。",
     `【视觉类型】\n${visualType?.prompt || "按巴迪高品牌视觉规范生成。"}`,
     scene ? `【场景视觉基因】\n${scene.prompt}` : "",
-    `【人物规范】\n${PERSON_BASE_PROMPT}`,
+    noPeople
+      ? "【无人画面规范】\n画面中不得出现人物、人体局部、手、脸、人物倒影或人形模特。围绕产品本身、风格语言和场景关系设计静物、平铺、悬挂、装置或环境陈列摄影。"
+      : `【人物规范】\n${PERSON_BASE_PROMPT}`,
     `【产品与参考图】\n${PRODUCT_FIDELITY_PROMPT}\n${imageReferenceInstructions}${analysisInstructions ? `\n\n【图片视觉分析】\n${analysisInstructions}` : ""}`,
     input.productFunctions.length
       ? `【卖点视觉表达】\n${input.productFunctions
@@ -423,9 +513,9 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
       : "",
     `【摄影参数】\n${shotScale?.prompt || input.shotScale} ${cameraAngle?.prompt || input.cameraAngle}`,
     `【色彩与输出】\n${tone?.prompt || input.tone} ${aspectRatio?.prompt || input.aspectRatio} ${resolution?.prompt || input.resolution}`,
-    `【批次要求】\n本次生成${input.imageCount}张；保持品牌、产品与人物规则一致，同时让构图和动作具有合理差异，避免复制画面。`,
+    `【批次要求】\n本次生成${input.imageCount}张；保持品牌与产品规则一致，${noPeople ? "所有画面均保持无人，仅让产品陈列、机位和构图产生合理差异" : "同时保持人物规则一致，让构图和动作具有合理差异"}，避免复制画面。`,
     input.originalPrompt.trim() ? `【用户补充创意】\n${input.originalPrompt.trim()}` : "",
-    "【质量底线】\n产品还原优先于创意发挥；人物、产品、家具或自然环境之间的重力、遮挡、透视、受光和材质关系必须真实。",
+    `【质量底线】\n产品还原优先于创意发挥；${noPeople ? "产品、道具、家具" : "人物、产品、家具"}或自然环境之间的重力、遮挡、透视、受光和材质关系必须真实。`,
   ].filter(Boolean);
 
   const sceneLabel = scene?.label || input.productFunctions.slice(0, 2).join("·") || "品牌视觉";
@@ -434,11 +524,13 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
     input.productImages.length
       ? `Product master references: ${input.productImages.join(", ")}. Use them to lock silhouette, waistband, leg openings, seams, texture, color, pattern, binding, proportions, and packaging structure.`
       : "No product master reference was provided.",
-    input.characterImages.length
+    noPeople
+      ? "People count is zero. Do not use any character reference and do not depict people, body parts, hands, faces, reflections of people, or human-shaped mannequins."
+      : input.characterImages.length
       ? `Character identity references: ${input.characterImages.join(", ")}. Preserve identity, facial features, hairstyle, and body proportions only.`
       : "No character reference was provided; use an unmistakably adult Asian woman aged 22–30 with natural features and healthy proportions.",
     input.referenceImageWeights?.length
-      ? `Style references: ${input.referenceImageWeights.map((item, index) => `Reference ${index + 1} '${item.name}' — ${WEIGHT_EN[item.weight]}`).join("; ")}. Style references may affect only composition, lighting, color, grading, and mood; they must never alter product construction or character identity.`
+      ? `Style references: ${input.referenceImageWeights.map((item, index) => `Reference ${index + 1} '${item.name}' — ${WEIGHT_EN[item.weight]}`).join("; ")}. Extract only abstract lighting, palette, tonal contrast, depth, negative-space rhythm, and general framing principles. Never reproduce a reference subject, face, body, garment, pose, action, crop, camera placement, background, furniture, props, architecture, object placement, or exact composition. High weight never overrides this boundary.`
       : "No additional style reference was provided.",
   ].join("\n");
 
@@ -446,24 +538,29 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
     "[BRAND AND TASK]\nBadigao premium commercial visual. Combine realistic camera rendering, candid natural lifestyle photography, and refined brand polish.",
     `[VISUAL TYPE]\n${ENGLISH_VISUAL_TYPE[input.visualType]}`,
     scene ? `[SCENE DNA]\n${ENGLISH_SCENES[scene.id] || scene.label}` : "",
-    "[PERSON]\nUse an unmistakably adult Asian woman aged 22–30 with natural facial features, healthy balanced proportions, light makeup, real skin tone variation, subtle pores and fine hair. Keep the pose relaxed, non-influencer-like, non-sexualized, and physically believable.",
+    noPeople
+      ? "[NO-PERSON COMPOSITION]\nCreate a strictly people-free product photograph. Do not show a person, body part, hand, face, skin, human reflection, or human-shaped mannequin. Build the composition from the product, the requested scene, styling surfaces, props, lighting, and abstract photographic direction only."
+      : "[PERSON]\nUse an unmistakably adult Asian woman aged 22–30 with natural facial features, healthy balanced proportions, light makeup, real skin tone variation, subtle pores and fine hair. Keep the pose relaxed, non-influencer-like, non-sexualized, and physically believable.",
     `[PRODUCT AND REFERENCES]\nThe uploaded product master reference has the highest priority. Product fidelity overrides creative variation. Preserve silhouette, waistband width, leg-opening curve, seams, texture, color, pattern, binding, and proportions. Keep the product clear and unobstructed.\n${englishReferenceInstructions}`,
     input.productFunctions.length
       ? `[SELLING-POINT EXPRESSION]\n${input.productFunctions.map((id) => ENGLISH_SELLING_POINTS[id]).filter(Boolean).join("\n")}`
       : "",
     `[CAMERA]\n${ENGLISH_SHOTS[input.shotScale] || input.shotScale} ${ENGLISH_ANGLES[input.cameraAngle] || input.cameraAngle}`,
     `[COLOR AND OUTPUT]\n${ENGLISH_TONES[input.tone] || input.tone} Aspect ratio ${input.aspectRatio}. Target resolution ${input.resolution}.`,
-    `[BATCH]\nGenerate ${input.imageCount} image${input.imageCount === 1 ? "" : "s"}. Keep brand, product, and identity rules consistent while allowing only reasonable variation in pose, framing, or subtle composition.`,
+    `[BATCH]\nGenerate ${input.imageCount} image${input.imageCount === 1 ? "" : "s"}. Keep brand and product rules consistent while allowing only reasonable variation in ${noPeople ? "product arrangement, camera position, framing, or subtle composition; every image must remain people-free" : "pose, framing, or subtle composition"}.`,
     input.originalPrompt.trim()
       ? `[ADDITIONAL CREATIVE DIRECTION — ORIGINAL USER TEXT]\n${input.originalPrompt.trim()}`
       : "",
-    "[QUALITY FLOOR]\nProduct fidelity takes priority over creativity. Gravity, occlusion, perspective, lighting, anatomy, fabric behavior, furniture, and natural-environment relationships must remain physically credible.",
+    "[QUALITY FLOOR]\nProduct fidelity takes priority over creativity. The output must be a genuinely new photograph, not a near-duplicate or traced recreation of any style reference. Gravity, occlusion, perspective, lighting, anatomy, fabric behavior, furniture, and natural-environment relationships must remain physically credible.",
   ].filter(Boolean);
 
   const englishNegativePrompt = [
-    "minor, childlike face, ambiguous age, copied face, influencer face, plastic skin, waxy skin, excessive retouching, oily highlights, heavy makeup, seductive expression, erotic lingerie, transparent clothing, sexual pose, exaggerated chest, exaggerated buttocks, voyeuristic angle, distorted anatomy, extra limbs, extra fingers, missing fingers, fused fingers, twisted joints, incorrect gravity, incorrect perspective, hair clipping, garment clipping, product deformation, twisted waistband, incorrect leg openings, incorrect seams, melted fabric, wrong packaging proportions, gibberish text, low resolution, blur, noise, compression artifacts, excessive HDR, oversharpening, halos, banding, fake depth of field, excessive bokeh, fisheye, cropped head, cropped hands, cropped feet, watermark, incorrect logo, border, collage, cheap e-commerce look, obvious AI artifacts",
+    "near-duplicate of a style reference, copied reference composition, copied pose, copied crop, copied background, copied props, copied object placement, traced layout, minor, childlike face, ambiguous age, copied face, influencer face, plastic skin, waxy skin, excessive retouching, oily highlights, heavy makeup, seductive expression, erotic lingerie, transparent clothing, sexual pose, exaggerated chest, exaggerated buttocks, voyeuristic angle, distorted anatomy, extra limbs, extra fingers, missing fingers, fused fingers, twisted joints, incorrect gravity, incorrect perspective, hair clipping, garment clipping, product deformation, twisted waistband, incorrect leg openings, incorrect seams, melted fabric, wrong packaging proportions, gibberish text, low resolution, blur, noise, compression artifacts, excessive HDR, oversharpening, halos, banding, fake depth of field, excessive bokeh, fisheye, cropped head, cropped hands, cropped feet, watermark, incorrect logo, border, collage, cheap e-commerce look, obvious AI artifacts",
     ...(scene?.negativePrompt ? ["Avoid the scene-specific failures defined in the Chinese display version."] : []),
+    ...(noPeople ? ["person, people, human, model, body, body part, hand, hands, face, skin, human reflection, human-shaped mannequin"] : []),
   ].join(", ");
+
+  if (noPeople) negativeFragments.push("人物，人像，人体，身体局部，手，脸，皮肤，人物倒影，人形模特");
 
   return {
     title: `${input.visualType}类·${sceneLabel}`,

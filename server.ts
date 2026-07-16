@@ -1,7 +1,7 @@
 import express from "express";
 import path from "path";
 import { randomUUID } from "crypto";
-import { mkdir, writeFile } from "fs/promises";
+import { mkdir, readFile, writeFile } from "fs/promises";
 import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, type Part } from "@google/genai";
@@ -33,18 +33,14 @@ const openAIProxyAgent = OPENAI_PROXY_URL ? new ProxyAgent(OPENAI_PROXY_URL) : u
 app.use("/generated", express.static(GENERATED_DIR));
 
 let ai: GoogleGenAI | null = null;
-if (process.env.GEMINI_API_KEY) {
-  try {
-    ai = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: { headers: { "User-Agent": "aistudio-build" } },
-    });
-    console.log("Gemini SDK successfully initialized on server.");
-  } catch (error) {
-    console.error("Failed to initialize Gemini SDK:", error);
-  }
-} else {
-  console.warn("GEMINI_API_KEY is not defined. Using deterministic prompt compilation.");
+try {
+  ai = new GoogleGenAI({
+    apiKey: process.env.GEMINI_API_KEY || "",
+    httpOptions: { headers: { "User-Agent": "aistudio-build" } },
+  });
+  console.log("Gemini SDK successfully initialized on server.");
+} catch (error) {
+  console.error("Failed to initialize Gemini SDK:", error);
 }
 
 function normalizePromptInput(body: Record<string, unknown>): PromptCompileInput {
@@ -63,6 +59,7 @@ function normalizePromptInput(body: Record<string, unknown>): PromptCompileInput
     resolution: typeof body.resolution === "string" ? body.resolution : "2K",
     aspectRatio: typeof body.aspectRatio === "string" ? body.aspectRatio : "3:4",
     imageCount: Number.isFinite(Number(body.imageCount)) ? Number(body.imageCount) : 4,
+    modelCount: Number.isFinite(Number(body.modelCount)) ? Math.max(0, Math.min(4, Number(body.modelCount))) : 1,
     productImages: Array.isArray(body.productImages) ? body.productImages.map(String).filter(Boolean) : [],
     characterImages: Array.isArray(body.characterImages) ? body.characterImages.map(String).filter(Boolean) : [],
     referenceImages: Array.isArray(body.referenceImages) ? body.referenceImages.map(String).filter(Boolean) : [],
@@ -181,21 +178,97 @@ function normalizeGeminiImageResolution(resolution: string) {
   return ["1K", "2K", "4K"].includes(resolution) ? resolution : "2K";
 }
 
+const GEMINI_REFERENCE_BOUNDARY = `
+[REFERENCE ROLE BOUNDARY — MANDATORY]
+Every uploaded image has one and only one role. Never merge roles between images.
+- STYLE REFERENCE: extract only abstract photographic attributes such as lighting softness, color palette, tonal contrast, depth, negative-space rhythm, and general framing principles. Do not reproduce its subject, face, body, garment, pose, action, crop, camera placement, background, furniture, props, architecture, object placement, or exact composition.
+- CHARACTER IDENTITY: preserve only the adult person's identity, facial features, hairstyle, and body proportions. Do not copy clothing, pose, crop, background, lighting, or scene objects.
+- PRODUCT MASTER/DETAIL: preserve only the product's design, construction, color, texture, seams, proportions, and visible brand structure. Do not copy the source background, body pose, crop, or surrounding objects.
+The requested scene and camera settings must create a genuinely new photograph. A near-duplicate, traced layout, or recognizable recreation of any style reference is a failed result.
+`;
+
+const GEMINI_FINAL_COMPLIANCE = "FINAL COMPLIANCE CHECK: Create a new scene and a clearly distinct composition. Use style references only for abstract visual language. Preserve product fidelity and character identity from their dedicated references. Reject any result that recreates a style reference's recognizable content or layout.";
+const GEMINI_SAFE_COMMERCIAL_FRAMING = "Depict clearly adult professional models only. Present the apparel in a neutral, non-sexualized commercial catalog and brand-campaign context, with natural posture and product-focused framing.";
+const GEMINI_NO_PEOPLE_FRAMING = "Create a strictly people-free commercial product photograph. Do not depict any person, model, face, hand, skin, body part, human reflection, or human-shaped mannequin. Use only the product, scene, styling surfaces, props, lighting, and abstract photographic direction.";
+type GeminiReferenceMetadata = Pick<PromptImageInput, "name" | "role" | "weight">;
+
+function getGeminiReferenceInstruction(asset: GeminiReferenceMetadata, index: number) {
+  const weight = asset.weight || "medium";
+  const weightRules = {
+    low: "LOW style intensity: use only a faint secondary cue.",
+    medium: "MEDIUM style intensity: make the abstract visual direction noticeable, but keep the new composition clearly distinct.",
+    high: "HIGH style intensity: strongly apply only the permitted abstract photographic attributes; high weight never permits copying content or exact layout.",
+  } as const;
+
+  const roleRules: Record<ImageReferenceRole, string> = {
+    style_reference: `ROLE = STYLE REFERENCE ONLY. ${weightRules[weight]} Forbidden from this image: subject identity, face, body, garment design, pose, action, crop, background, props, furniture, architecture, object placement, and exact composition.`,
+    character_identity: "ROLE = CHARACTER IDENTITY ONLY. Preserve adult identity, facial features, hairstyle, and body proportions. Ignore and replace the source clothing, pose, crop, background, lighting, and props.",
+    product_master: "ROLE = PRODUCT MASTER. Preserve product silhouette, construction, color, texture, seams, binding, proportions, and visible brand structure with highest fidelity. Ignore the source background, pose, crop, and surrounding objects.",
+    product_detail: "ROLE = PRODUCT DETAIL. Preserve only the visible material and construction details. Do not inherit the source scene, pose, crop, or unrelated objects.",
+  };
+
+  return `REFERENCE IMAGE ${index + 1}: ${asset.name}. ${roleRules[asset.role]}`;
+}
+
+function orderGeminiReferences<T extends GeminiReferenceMetadata>(assets: T[]) {
+  const rolePriority: Record<ImageReferenceRole, number> = {
+    style_reference: 0,
+    character_identity: 1,
+    product_detail: 2,
+    product_master: 3,
+  };
+  return [...assets].sort((a, b) => rolePriority[a.role] - rolePriority[b.role]);
+}
+
+function buildGeminiGenerationPrompt(basePrompt: string, negativePrompt: string, index: number, imageCount: number, modelCount: number) {
+  const noPeople = modelCount === 0;
+  return [
+    basePrompt,
+    `[COMMERCIAL SAFETY FRAMING]\n${noPeople ? GEMINI_NO_PEOPLE_FRAMING : GEMINI_SAFE_COMMERCIAL_FRAMING}`,
+    `[BATCH VARIATION]\nThis is image ${index + 1} of ${imageCount}. Preserve the product, brand rules, and all reference-image responsibilities.${noPeople ? " Keep every image strictly people-free. Vary only product arrangement, camera position, framing, or subtle composition." : " Preserve character identity. Vary only pose, framing, or subtle composition where reasonable."}`,
+    negativePrompt ? `[MUST AVOID]\n${negativePrompt}` : "",
+  ].filter(Boolean).join("\n\n");
+}
+
+function buildGeminiPromptPreview(prompt: string, assets: GeminiReferenceMetadata[]) {
+  const referenceBlocks = orderGeminiReferences(assets).map((asset, index) =>
+    `${getGeminiReferenceInstruction(asset, index)}\n[BINARY REFERENCE IMAGE ${index + 1} IS INSERTED HERE]`,
+  );
+  return [prompt, GEMINI_REFERENCE_BOUNDARY.trim(), ...referenceBlocks, GEMINI_FINAL_COMPLIANCE].join("\n\n");
+}
+
+function normalizeReferenceMetadata(value: unknown): GeminiReferenceMetadata[] {
+  if (!Array.isArray(value)) return [];
+  const allowedRoles = new Set<ImageReferenceRole>([
+    "product_master",
+    "product_detail",
+    "character_identity",
+    "style_reference",
+  ]);
+  return value.slice(0, MAX_REFERENCE_IMAGES).map((raw, index) => {
+    const asset = (raw || {}) as Record<string, unknown>;
+    const role = String(asset.role || "style_reference") as ImageReferenceRole;
+    if (!allowedRoles.has(role)) throw new Error(`第 ${index + 1} 张图片角色无效。`);
+    const weight = ["low", "medium", "high"].includes(String(asset.weight))
+      ? String(asset.weight) as GeminiReferenceMetadata["weight"]
+      : undefined;
+    return { name: String(asset.name || `参考图 ${index + 1}`), role, weight };
+  });
+}
+
 async function requestGeminiImage(args: {
   prompt: string;
   assets: PromptImageInput[];
   aspectRatio: string;
   resolution: string;
 }) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("尚未配置 GEMINI_API_KEY，无法调用 Gemini 图片生成模型。");
-
   const model = process.env.GEMINI_IMAGE_MODEL || "gemini-3-pro-image";
-  const parts: Array<Record<string, unknown>> = [{ text: args.prompt }];
-  args.assets.forEach((asset, index) => {
+  const orderedAssets = orderGeminiReferences(args.assets);
+  const parts: Array<Record<string, unknown>> = [{ text: `${args.prompt}\n\n${GEMINI_REFERENCE_BOUNDARY}` }];
+  orderedAssets.forEach((asset, index) => {
     const parsed = parseImageDataUrl(asset.dataUrl);
     parts.push({
-      text: `参考图 ${index + 1}：${asset.name}；角色：${asset.role}；权重：${asset.weight || "默认"}。严格按该角色限制参考范围。`,
+      text: getGeminiReferenceInstruction(asset, index),
     });
     parts.push({
       inline_data: {
@@ -204,6 +277,9 @@ async function requestGeminiImage(args: {
       },
     });
   });
+  parts.push({
+    text: GEMINI_FINAL_COMPLIANCE,
+  });
 
   const response = await undiciFetch(
     `${GEMINI_API_BASE_URL}/models/${encodeURIComponent(model)}:generateContent`,
@@ -211,7 +287,7 @@ async function requestGeminiImage(args: {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-goog-api-key": apiKey,
+        "X-goog-api-key": process.env.GEMINI_API_KEY || "",
       },
       body: JSON.stringify({
         contents: [{ role: "user", parts }],
@@ -227,6 +303,12 @@ async function requestGeminiImage(args: {
       dispatcher: openAIProxyAgent,
     },
   );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error(`Gemini API Error: ${response.status} ${response.statusText}`, errorText);
+    throw new Error(`Gemini API failed: ${response.status} - ${errorText.substring(0, 200)}`);
+  }
 
   const payload = await response.json() as {
     candidates?: Array<{
@@ -257,6 +339,120 @@ async function requestGeminiImage(args: {
     ].filter(Boolean).join("；");
     throw new Error(`Gemini 图片模型未返回图片数据${details ? `：${details}` : "。"}`);
   }
+  return { base64: inlineData.data, mimeType: inlineData.mimeType || "image/png", model };
+}
+
+function getImageMimeType(fileName: string) {
+  const extension = path.extname(fileName).toLowerCase();
+  if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
+  if (extension === ".webp") return "image/webp";
+  return "image/png";
+}
+
+async function loadEditableImage(imageUrl: string) {
+  if (imageUrl.startsWith("data:image/")) return parseImageDataUrl(imageUrl);
+
+  const localPathMatch = imageUrl.match(/(?:^|\/)(?:generated)\/([^/?#]+)(?:[?#].*)?$/i);
+  if (localPathMatch) {
+    const fileName = path.basename(decodeURIComponent(localPathMatch[1]));
+    const buffer = await readFile(path.join(GENERATED_DIR, fileName));
+    if (buffer.byteLength > MAX_IMAGE_BYTES) throw new Error("待编辑原图不能超过20MB。");
+    return { mimeType: getImageMimeType(fileName), data: buffer.toString("base64"), byteLength: buffer.byteLength };
+  }
+
+  if (/^https?:\/\//i.test(imageUrl)) {
+    const response = await undiciFetch(imageUrl, {
+      signal: AbortSignal.timeout(30_000),
+      dispatcher: openAIProxyAgent,
+    });
+    if (!response.ok) throw new Error(`原图读取失败：${response.status} ${response.statusText}`);
+    const mimeType = response.headers.get("content-type")?.split(";")[0] || "image/jpeg";
+    if (!mimeType.startsWith("image/")) throw new Error("原图地址没有返回有效图片。");
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.byteLength > MAX_IMAGE_BYTES) throw new Error("待编辑原图不能超过20MB。");
+    return { mimeType, data: buffer.toString("base64"), byteLength: buffer.byteLength };
+  }
+
+  throw new Error("无法读取待编辑原图，请重新打开生成结果后再试。");
+}
+
+async function requestGeminiImageEdit(args: {
+  original: { mimeType: string; data: string };
+  mask: { mimeType: string; data: string };
+  replacement?: { mimeType: string; data: string; name: string };
+  prompt: string;
+}) {
+  const model = process.env.GEMINI_IMAGE_MODEL || "gemini-3-pro-image";
+  const instruction = `
+[LOCAL INPAINTING TASK]
+Edit the first image according to the user's request. The second image is a transparent PNG mask: red or non-transparent pixels mark the only editable region.
+Modify only pixels inside the marked region. Preserve everything outside the mask as faithfully as possible, including identity, product design, garment structure, color, lighting, background, camera, crop, anatomy, and resolution.
+Blend the edited boundary naturally without halos, seams, color discontinuity, duplicated body parts, or unrelated changes. Do not add text, logos, watermarks, borders, or new objects unless explicitly requested.
+${args.replacement ? "The third image is a local replacement reference. Use its relevant subject, product, material, color, structure, or visual features only inside the marked mask. Adapt scale, perspective, lighting, occlusion, and color so the replacement looks native to the original photograph. Never paste it as a rectangular patch and never alter unmasked pixels." : "No replacement reference image was supplied; perform the edit from the original image and the user's text only."}
+
+[USER EDIT REQUEST]
+${args.prompt}
+`;
+  const parts: Array<Record<string, unknown>> = [
+    { text: instruction },
+    { text: "IMAGE 1 — ORIGINAL IMAGE TO EDIT" },
+    { inline_data: { mime_type: args.original.mimeType, data: args.original.data } },
+    { text: "IMAGE 2 — EDIT MASK. RED/NON-TRANSPARENT PIXELS ARE THE ONLY EDITABLE AREA." },
+    { inline_data: { mime_type: args.mask.mimeType, data: args.mask.data } },
+  ];
+  if (args.replacement) {
+    parts.push(
+      { text: `IMAGE 3 — LOCAL REPLACEMENT REFERENCE: ${args.replacement.name}. Use it only to replace or guide content inside the marked mask.` },
+      { inline_data: { mime_type: args.replacement.mimeType, data: args.replacement.data } },
+    );
+  }
+  parts.push({ text: "Return one completed edited image only. Recheck that all unmasked regions remain unchanged." });
+
+  const response = await undiciFetch(
+    `${GEMINI_API_BASE_URL}/models/${encodeURIComponent(model)}:generateContent`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-goog-api-key": process.env.GEMINI_API_KEY || "",
+      },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts }],
+        generationConfig: { responseModalities: ["IMAGE"] },
+      }),
+      signal: AbortSignal.timeout(240_000),
+      dispatcher: openAIProxyAgent,
+    },
+  );
+
+  const payload = await response.json() as {
+    candidates?: Array<{
+      finishReason?: string;
+      content?: { parts?: Array<{ text?: string; inlineData?: { data?: string; mimeType?: string }; inline_data?: { data?: string; mime_type?: string } }> };
+    }>;
+    promptFeedback?: { blockReason?: string; blockReasonMessage?: string };
+    error?: { message?: string; status?: string };
+  };
+  if (!response.ok) {
+    const status = payload.error?.status ? ` (${payload.error.status})` : "";
+    throw new Error(`${payload.error?.message || `Gemini 图片编辑请求失败：${response.status}`}${status}`);
+  }
+
+  const allParts = payload.candidates?.flatMap((candidate) => candidate.content?.parts || []) || [];
+  const imagePart = allParts.find((part) => part.inlineData?.data || part.inline_data?.data);
+  const inlineData = imagePart?.inlineData || (imagePart?.inline_data
+    ? { data: imagePart.inline_data.data, mimeType: imagePart.inline_data.mime_type }
+    : undefined);
+  if (!inlineData?.data) {
+    const details = [
+      payload.promptFeedback?.blockReason,
+      payload.promptFeedback?.blockReasonMessage,
+      payload.candidates?.map((candidate) => candidate.finishReason).filter(Boolean).join(", "),
+      allParts.map((part) => part.text?.trim()).filter(Boolean).join(" "),
+    ].filter(Boolean).join("；");
+    throw new Error(`Gemini 图片编辑未返回图片${details ? `：${details}` : "。"}`);
+  }
+
   return { base64: inlineData.data, mimeType: inlineData.mimeType || "image/png", model };
 }
 
@@ -555,10 +751,154 @@ app.get("/api/gemini/status", (_req, res) => {
   });
 });
 
+
+async function refinePrompt(input: PromptCompileInput, assets: PromptImageInput[]): Promise<string> {
+  const compiled = compilePrompt(input);
+  const parts: Part[] = [
+    {
+      text: JSON.stringify({
+        task: "上一次生成的提示词触发了内容安全过滤(IMAGE_SAFETY)。请根据以下信息重新润色该提示词，使其在保持品牌视觉要求和产品特征的同时，完全规避所有可能导致内容安全过滤的表达。严格遵守商业视觉的安全框架。",
+        compiled,
+      }),
+    },
+    ...buildImageParts(assets),
+  ];
+
+  if (!ai) return compiled.positivePrompt;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: process.env.GEMINI_TEXT_MODEL || "gemini-3.5-flash",
+      contents: parts,
+      config: {
+        systemInstruction: PROMPT_REFINER_SYSTEM_INSTRUCTION + "\n\n【特别安全指令】这是重试请求，请极端谨慎地处理提示词，移除任何可能被误判为敏感、非专业或不当的表达，保持商业视觉的严谨与规范。",
+        responseMimeType: "application/json",
+        temperature: 0.2,
+      },
+    });
+
+    const refined = parseModelJson(response.text || "{}");
+    return refined.positivePrompt?.trim() || compiled.positivePrompt;
+  } catch (error) {
+    console.error("Prompt refinement failed, using fallback:", error);
+    return compiled.positivePrompt;
+  }
+}
+
+app.post("/api/gemini/edit-image", async (req, res) => {
+  const requestId = randomUUID();
+  const startedAt = Date.now();
+  if (!process.env.GEMINI_API_KEY) {
+    return res.status(503).json({
+      requestId,
+      status: "failed",
+      imageStatus: "not_returned",
+      error: "尚未配置 GEMINI_API_KEY，无法进行局部重绘。",
+    });
+  }
+
+  try {
+    const imageUrl = typeof req.body?.imageUrl === "string" ? req.body.imageUrl.trim() : "";
+    const maskDataUrl = typeof req.body?.maskDataUrl === "string" ? req.body.maskDataUrl : "";
+    const replacementImageDataUrl = typeof req.body?.replacementImageDataUrl === "string" ? req.body.replacementImageDataUrl : "";
+    const replacementImageName = typeof req.body?.replacementImageName === "string" ? req.body.replacementImageName.trim().slice(0, 160) : "局部替换参考图";
+    const prompt = typeof req.body?.prompt === "string" ? req.body.prompt.trim() : "";
+    if (!imageUrl) return res.status(400).json({ requestId, status: "failed", imageStatus: "not_returned", error: "缺少待编辑原图。" });
+    if (!maskDataUrl) return res.status(400).json({ requestId, status: "failed", imageStatus: "not_returned", error: "缺少局部涂抹蒙版。" });
+    if (!prompt) return res.status(400).json({ requestId, status: "failed", imageStatus: "not_returned", error: "请输入局部修改要求。" });
+    if (prompt.length > 1000) return res.status(400).json({ requestId, status: "failed", imageStatus: "not_returned", error: "局部修改要求不能超过1000字。" });
+
+    console.info("Gemini local image edit started", {
+      requestId,
+      imageUrl,
+      promptLength: prompt.length,
+      maskWidth: req.body?.maskWidth,
+      maskHeight: req.body?.maskHeight,
+      hasReplacementImage: Boolean(replacementImageDataUrl),
+      replacementImageName: replacementImageDataUrl ? replacementImageName : undefined,
+    });
+
+    const original = await loadEditableImage(imageUrl);
+    const mask = parseImageDataUrl(maskDataUrl);
+    const replacement = replacementImageDataUrl ? parseImageDataUrl(replacementImageDataUrl) : undefined;
+    const generated = await requestGeminiImageEdit({
+      original,
+      mask,
+      replacement: replacement ? { ...replacement, name: replacementImageName || "局部替换参考图" } : undefined,
+      prompt,
+    });
+    await mkdir(GENERATED_DIR, { recursive: true });
+    const extension = generated.mimeType === "image/jpeg" ? "jpg" : generated.mimeType === "image/webp" ? "webp" : "png";
+    const fileName = `${Date.now()}-${randomUUID()}-edit.${extension}`;
+    const outputBuffer = Buffer.from(generated.base64, "base64");
+    await writeFile(path.join(GENERATED_DIR, fileName), outputBuffer);
+
+    const durationMs = Date.now() - startedAt;
+    console.info("Gemini local image edit completed", {
+      requestId,
+      durationMs,
+      outputBytes: outputBuffer.byteLength,
+      resultUrl: `/generated/${fileName}`,
+    });
+
+    return res.json({
+      requestId,
+      status: "completed",
+      imageStatus: "returned",
+      resultUrl: `/generated/${fileName}`,
+      model: generated.model,
+      durationMs,
+      originalBytes: original.byteLength,
+      maskBytes: mask.byteLength,
+      replacementBytes: replacement?.byteLength || 0,
+      outputBytes: outputBuffer.byteLength,
+    });
+  } catch (error) {
+    const isTimeout = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+    const message = isTimeout
+      ? "局部重绘超过4分钟仍未返回，已自动结束本次请求，请缩小涂抹范围后重试。"
+      : error instanceof Error ? error.message : "局部重绘失败。";
+    const durationMs = Date.now() - startedAt;
+    console.error("Gemini local image edit failed", { requestId, durationMs, error });
+    return res.status(isTimeout ? 504 : 502).json({
+      requestId,
+      status: "failed",
+      imageStatus: "not_returned",
+      durationMs,
+      error: message,
+    });
+  }
+});
+
+app.post("/api/gemini/prompt-preview", (req, res) => {
+  try {
+    const input = normalizePromptInput(req.body || {});
+    const compiled = compilePrompt(input);
+    const assets = normalizeReferenceMetadata(req.body?.assetMetadata);
+    const imageCount = Math.max(1, Math.min(6, Number(input.imageCount) || 1));
+    const basePrompt = typeof req.body?.prompt === "string" && req.body.prompt.trim()
+      ? req.body.prompt.trim()
+      : compiled.positivePromptEnglish || compiled.positivePrompt;
+    const negativePrompt = typeof req.body?.negativePrompt === "string" && req.body.negativePrompt.trim()
+      ? req.body.negativePrompt.trim()
+      : compiled.negativePromptEnglish || compiled.negativePrompt;
+    const generationPrompt = buildGeminiGenerationPrompt(basePrompt, negativePrompt, 0, imageCount, input.modelCount);
+
+    return res.json({
+      prompt: buildGeminiPromptPreview(generationPrompt, assets),
+      negativePrompt,
+      model: process.env.GEMINI_IMAGE_MODEL || "gemini-3-pro-image",
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "实际生图提示词生成失败。";
+    return res.status(400).json({ error: message });
+  }
+});
+
 app.post("/api/gemini/generate-images", async (req, res) => {
   if (!process.env.GEMINI_API_KEY) {
     return res.status(503).json({
-      error: "Gemini 生图链路已接入，但本机尚未配置 GEMINI_API_KEY。请在 .env.local 中设置后重启服务。",
+      error: "真实生图链路已接入，但本机尚未配置 GEMINI_API_KEY。请在 .env.local 中设置后重启服务。",
       code: "GEMINI_API_KEY_MISSING",
     });
   }
@@ -571,19 +911,44 @@ app.post("/api/gemini/generate-images", async (req, res) => {
     const basePrompt = typeof req.body?.prompt === "string" && req.body.prompt.trim()
       ? req.body.prompt.trim()
       : compiled.positivePromptEnglish || compiled.positivePrompt;
-    const safeCommercialFraming = "Depict clearly adult professional models only. Present the apparel in a neutral, non-sexualized commercial catalog and brand-campaign context, with natural posture and product-focused framing.";
+    const negativePrompt = typeof req.body?.negativePrompt === "string" && req.body.negativePrompt.trim()
+      ? req.body.negativePrompt.trim()
+      : compiled.negativePromptEnglish || compiled.negativePrompt;
 
     await mkdir(GENERATED_DIR, { recursive: true });
     const results: string[] = [];
     const model = process.env.GEMINI_IMAGE_MODEL || "gemini-3-pro-image";
-    for (let index = 0; index < imageCount; index += 1) {
-      const prompt = `${basePrompt}\n\n[COMMERCIAL SAFETY FRAMING]\n${safeCommercialFraming}\n\n[BATCH VARIATION]\nThis is image ${index + 1} of ${imageCount}. Preserve the product, character identity, brand rules, and all reference-image responsibilities. Vary only pose, framing, or subtle composition where reasonable.`;
-      const generated = await requestGeminiImage({
+
+    // Define generation function to make it retryable
+    const generateOne = async (prompt: string) => {
+      return await requestGeminiImage({
         prompt,
         assets,
         aspectRatio: input.aspectRatio,
         resolution: input.resolution,
       });
+    };
+
+    for (let index = 0; index < imageCount; index += 1) {
+      const prompt = buildGeminiGenerationPrompt(basePrompt, negativePrompt, index, imageCount, input.modelCount);
+
+      let generated;
+      try {
+        generated = await generateOne(prompt);
+      } catch (error) {
+         if (error instanceof Error && error.message.includes("IMAGE_SAFETY")) {
+             console.log("IMAGE_SAFETY triggered, retrying with refined prompt...");
+             const refinedPrompt = await refinePrompt(input, assets);
+             generated = await generateOne(buildGeminiGenerationPrompt(refinedPrompt, negativePrompt, index, imageCount, input.modelCount));
+         } else {
+             throw error;
+         }
+      }
+
+      if (!generated) {
+        throw new Error("生成图片失败，请稍后重试。");
+      }
+
       const extension = generated.mimeType === "image/jpeg" ? "jpg" : generated.mimeType === "image/webp" ? "webp" : "png";
       const fileName = `${Date.now()}-${randomUUID()}.${extension}`;
       await writeFile(path.join(GENERATED_DIR, fileName), Buffer.from(generated.base64, "base64"));
@@ -601,7 +966,23 @@ app.post("/api/gemini/generate-images", async (req, res) => {
   } catch (error) {
     console.error("Gemini image generation failed:", error);
     const message = error instanceof Error ? error.message : "Gemini 生图失败。";
-    return res.status(502).json({ error: message });
+
+    // Check for specific error types in the message and pass them through
+    const errorResponse: { error: string, details?: string } = { error: message, details: message };
+
+    // Check if the error response might be HTML (e.g., from a 403 or 502)
+    if (message.includes("Unexpected token '<'")) {
+       return res.status(502).json({ error: "Gemini API 服务暂时不可用或认证失败。", details: message });
+    }
+    // Check for rate limit errors
+    if (message.includes("429")) {
+       return res.status(429).json({ error: "API 调用频率过高，请稍后再试或检查您的 Gemini API 配额。", details: message });
+    }
+    // Check for safety filter errors
+    if (message.includes("IMAGE_SAFETY")) {
+       return res.status(400).json({ error: "由于内容安全策略，此次生成被拦截，请尝试修改提示词或参考图。", details: message });
+    }
+    return res.status(502).json(errorResponse);
   }
 });
 

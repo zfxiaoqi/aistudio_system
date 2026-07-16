@@ -207,12 +207,12 @@ export default function HistoryPage({
                     <div className="grid grid-cols-2 w-full h-full gap-0.5">
                       {task.results.slice(0, 4).map((imgUrl, i) => (
                         <div key={i} className="relative overflow-hidden w-full h-full bg-slate-800">
-                          <img
+                          {imgUrl && <img
                             src={imgUrl}
                             alt={`Result ${i + 1}`}
                             referrerPolicy="no-referrer"
                             className="w-full h-full object-cover group-hover:scale-105 transition duration-500"
-                          />
+                          />}
                         </div>
                       ))}
                       {/* Overlay count indicator if more than 4 */}

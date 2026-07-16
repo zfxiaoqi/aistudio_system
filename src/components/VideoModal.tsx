@@ -133,13 +133,13 @@ export default function VideoModal({ imageUrl, onClose, onSaveVideo }: VideoModa
           <div className="flex-1 flex items-center justify-center relative my-6 rounded-xl overflow-hidden bg-slate-950 shadow-inner">
             {/* The Image being animated */}
             <div className="w-full h-full overflow-hidden flex items-center justify-center relative">
-              <img
+              {imageUrl && <img
                 src={imageUrl}
                 alt="Simulated video viewport"
                 referrerPolicy="no-referrer"
                 className="max-w-full max-h-[45vh] object-contain rounded-xl select-none"
                 style={generatedVideo ? getMotionStyle() : {}}
-              />
+              />}
             </div>
 
             {/* Video Watermark or Playback Controls if ready */}

@@ -26,6 +26,8 @@ interface SidebarParamsProps {
   isOptimizing: boolean;
   onGenerate: () => void;
   isGenerating: boolean;
+  actualPromptPreview: string;
+  isPromptPreviewLoading: boolean;
 }
 
 export default function SidebarParams({
@@ -34,7 +36,9 @@ export default function SidebarParams({
   onOptimizePrompt,
   isOptimizing,
   onGenerate,
-  isGenerating
+  isGenerating,
+  actualPromptPreview,
+  isPromptPreviewLoading,
 }: SidebarParamsProps) {
   // Collapsible section state
   const [collapsed, setCollapsed] = React.useState<{ [key: string]: boolean }>({
@@ -45,27 +49,27 @@ export default function SidebarParams({
     prompt: false
   });
 
-  const [modelCount, setModelCount] = React.useState<number>(1);
-  const [copiedPrompt, setCopiedPrompt] = React.useState<"positive" | "negative" | null>(null);
+  const modelCount = project.modelCount;
+  const [copiedPrompt, setCopiedPrompt] = React.useState<"positive" | "negative" | "actual" | null>(null);
   const activeUploadIndexRef = useRef<number>(0);
 
-  const copyPrompt = async (text: string, type: "positive" | "negative") => {
+  const copyPrompt = async (text: string, type: "positive" | "negative" | "actual") => {
     await navigator.clipboard.writeText(text);
     setCopiedPrompt(type);
     window.setTimeout(() => setCopiedPrompt(null), 1600);
   };
 
   React.useEffect(() => {
-    if (project.characterImages) {
-      setModelCount(Math.max(1, project.characterImages.length));
+    if (project.characterImages.length > project.modelCount) {
+      onUpdateProject({ characterImages: project.characterImages.slice(0, project.modelCount) });
     }
-  }, [project.id]);
+  }, [project.characterImages, project.modelCount, onUpdateProject]);
 
   const handleModelCountChange = (count: number) => {
-    setModelCount(count);
-    if (project.characterImages.length > count) {
-      onUpdateProject({ characterImages: project.characterImages.slice(0, count) });
-    }
+    onUpdateProject({
+      modelCount: count,
+      characterImages: project.characterImages.slice(0, count),
+    });
   };
 
   const toggleCollapse = (section: string) => {
@@ -77,71 +81,97 @@ export default function SidebarParams({
   const characterInputRef = useRef<HTMLInputElement>(null);
   const referenceInputRef = useRef<HTMLInputElement>(null);
 
-  const handleProductUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || e.target.files.length === 0) return;
-    const file = e.target.files[0];
+  const processFile = async (file: File, type: 'product' | 'character' | 'reference') => {
     try {
       const prepared = await prepareImageForReference(file);
-      const isMain = project.productImages.length === 0;
-      const id = `prod-upload-${Date.now()}`;
-      const storageKey = `image-${id}`;
-      await saveImageData(storageKey, prepared.dataUrl);
-      const newAsset: ImageAsset = {
-        id,
-        name: file.name,
-        url: prepared.dataUrl,
-        isMain,
-        role: isMain ? "product_master" : "product_detail",
-        mimeType: prepared.mimeType,
-        width: prepared.width,
-        height: prepared.height,
-        originalBytes: prepared.originalBytes,
-        storageKey,
-      };
-      onUpdateProject({ productImages: [...project.productImages, newAsset] });
+      if (type === 'product') {
+        const isMain = project.productImages.length === 0;
+        const id = `prod-upload-${Date.now()}`;
+        const storageKey = `image-${id}`;
+        await saveImageData(storageKey, prepared.dataUrl);
+        const newAsset: ImageAsset = {
+          id,
+          name: file.name,
+          url: prepared.dataUrl,
+          isMain,
+          role: isMain ? "product_master" : "product_detail",
+          mimeType: prepared.mimeType,
+          width: prepared.width,
+          height: prepared.height,
+          originalBytes: prepared.originalBytes,
+          storageKey,
+        };
+        onUpdateProject({ productImages: [...project.productImages, newAsset] });
+      } else if (type === 'character') {
+        const id = `char-upload-${Date.now()}`;
+        const storageKey = `image-${id}`;
+        await saveImageData(storageKey, prepared.dataUrl);
+        const newAsset: ImageAsset = {
+          id,
+          name: file.name,
+          url: prepared.dataUrl,
+          role: "character_identity",
+          mimeType: prepared.mimeType,
+          width: prepared.width,
+          height: prepared.height,
+          originalBytes: prepared.originalBytes,
+          storageKey,
+        };
+
+        const targetIndex = activeUploadIndexRef.current;
+        const updatedImages = [...project.characterImages];
+        while (updatedImages.length <= targetIndex) {
+          updatedImages.push({
+            id: `char-placeholder-${Date.now()}-${updatedImages.length}`,
+            name: "未上传",
+            url: ""
+          });
+        }
+        updatedImages[targetIndex] = newAsset;
+        onUpdateProject({ characterImages: updatedImages });
+      } else if (type === 'reference') {
+        if (project.referenceImages.length >= 5) {
+          alert("最多只能上传5张参考图。");
+          return;
+        }
+        const id = `ref-upload-${Date.now()}`;
+        const storageKey = `image-${id}`;
+        await saveImageData(storageKey, prepared.dataUrl);
+        const newAsset: ReferenceImage = {
+          id,
+          name: file.name,
+          url: prepared.dataUrl,
+          weight: "medium",
+          role: "style_reference",
+          mimeType: prepared.mimeType,
+          width: prepared.width,
+          height: prepared.height,
+          originalBytes: prepared.originalBytes,
+          storageKey,
+        };
+        onUpdateProject({ referenceImages: [...project.referenceImages, newAsset] });
+      }
     } catch (error) {
-      alert(error instanceof Error ? error.message : "产品图处理失败。");
-    } finally {
-      e.target.value = "";
+      alert(error instanceof Error ? error.message : `${type}图处理失败。`);
     }
+  };
+
+  const handleProductUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    await processFile(e.target.files[0], 'product');
+    e.target.value = "";
   };
 
   const handleCharacterUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
-    const file = e.target.files[0];
-    try {
-      const prepared = await prepareImageForReference(file);
-      const id = `char-upload-${Date.now()}`;
-      const storageKey = `image-${id}`;
-      await saveImageData(storageKey, prepared.dataUrl);
-      const newAsset: ImageAsset = {
-        id,
-        name: file.name,
-        url: prepared.dataUrl,
-        role: "character_identity",
-        mimeType: prepared.mimeType,
-        width: prepared.width,
-        height: prepared.height,
-        originalBytes: prepared.originalBytes,
-        storageKey,
-      };
+    await processFile(e.target.files[0], 'character');
+    e.target.value = "";
+  };
 
-      const targetIndex = activeUploadIndexRef.current;
-      const updatedImages = [...project.characterImages];
-      while (updatedImages.length <= targetIndex) {
-        updatedImages.push({
-          id: `char-placeholder-${Date.now()}-${updatedImages.length}`,
-          name: "未上传",
-          url: ""
-        });
-      }
-      updatedImages[targetIndex] = newAsset;
-      onUpdateProject({ characterImages: updatedImages });
-    } catch (error) {
-      alert(error instanceof Error ? error.message : "人物图处理失败。");
-    } finally {
-      e.target.value = "";
-    }
+  const handleReferenceUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    await processFile(e.target.files[0], 'reference');
+    e.target.value = "";
   };
 
   const handleDeleteCharacter = (index: number) => {
@@ -162,35 +192,16 @@ export default function SidebarParams({
     }
   };
 
-  const handleReferenceUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || e.target.files.length === 0) return;
-    if (project.referenceImages.length >= 5) {
-      alert("最多只能上传5张参考图。");
-      return;
-    }
-    const file = e.target.files[0];
-    try {
-      const prepared = await prepareImageForReference(file);
-      const id = `ref-upload-${Date.now()}`;
-      const storageKey = `image-${id}`;
-      await saveImageData(storageKey, prepared.dataUrl);
-      const newAsset: ReferenceImage = {
-        id,
-        name: file.name,
-        url: prepared.dataUrl,
-        weight: "medium",
-        role: "style_reference",
-        mimeType: prepared.mimeType,
-        width: prepared.width,
-        height: prepared.height,
-        originalBytes: prepared.originalBytes,
-        storageKey,
-      };
-      onUpdateProject({ referenceImages: [...project.referenceImages, newAsset] });
-    } catch (error) {
-      alert(error instanceof Error ? error.message : "参考图处理失败。");
-    } finally {
-      e.target.value = "";
+  const handlePaste = (e: React.ClipboardEvent, type: 'product' | 'character' | 'reference') => {
+    const items = e.clipboardData.items;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf("image") !== -1) {
+        const file = items[i].getAsFile();
+        if (file) {
+          processFile(file, type);
+          break;
+        }
+      }
     }
   };
 
@@ -250,7 +261,7 @@ export default function SidebarParams({
                 <div className="grid grid-cols-4 gap-2">
                   {project.productImages.map((img) => (
                     <div key={img.id} className={`relative aspect-square rounded-lg overflow-hidden border ${img.isMain ? 'border-blue-500 ring-2 ring-blue-500/20' : 'border-gray-200'}`}>
-                      <img src={img.url} alt="Product" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+                      {img.url && <img src={img.url} alt="Product" referrerPolicy="no-referrer" className="w-full h-full object-cover" />}
                       <button
                         onClick={() => {
                           void deleteImageData(img.storageKey);
@@ -288,6 +299,7 @@ export default function SidebarParams({
                   {/* Upload button */}
                   <button
                     onClick={() => productInputRef.current?.click()}
+                    onPaste={(e) => handlePaste(e, 'product')}
                     className="aspect-square border border-dashed border-gray-200 hover:border-blue-500 rounded-lg flex flex-col items-center justify-center bg-gray-50 text-gray-400 hover:text-blue-500 transition"
                   >
                     <Upload className="w-4 h-4" />
@@ -312,12 +324,16 @@ export default function SidebarParams({
                       className="w-[70px]"
                       buttonClassName="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-semibold text-slate-700"
                       menuClassName="min-w-[110px]"
-                      options={[1, 2, 3, 4].map((count) => ({ value: String(count), label: `${count} 人` }))}
+                      options={[0, 1, 2, 3, 4].map((count) => ({ value: String(count), label: `${count} 人` }))}
                     />
                   </div>
                 </div>
 
-                <div className="grid grid-cols-4 gap-2">
+                {modelCount === 0 ? (
+                  <div className="rounded-xl border border-blue-100 bg-blue-50/70 px-3 py-2 text-[10px] leading-relaxed text-blue-700">
+                    无人物模式：不使用人物形象，主要依据产品图、风格图和所选场景完成创意产品摄影。
+                  </div>
+                ) : <div className="grid grid-cols-4 gap-2">
                   {Array.from({ length: modelCount }).map((_, index) => {
                     const img = project.characterImages[index];
                     const hasImage = img && img.url;
@@ -351,6 +367,10 @@ export default function SidebarParams({
                             activeUploadIndexRef.current = index;
                             characterInputRef.current?.click();
                           }}
+                          onPaste={(e) => {
+                            activeUploadIndexRef.current = index;
+                            handlePaste(e, 'character');
+                          }}
                           className="aspect-square border border-dashed border-gray-200 hover:border-blue-500 rounded-lg flex flex-col items-center justify-center bg-gray-50 text-gray-400 hover:text-blue-500 transition"
                           title={`上传 模特 ${index + 1}`}
                         >
@@ -361,7 +381,7 @@ export default function SidebarParams({
                     }
                   })}
                   <input type="file" ref={characterInputRef} onChange={handleCharacterUpload} accept="image/*" className="hidden" />
-                </div>
+                </div>}
 
 
               </div>
@@ -376,7 +396,7 @@ export default function SidebarParams({
                 <div className="grid grid-cols-4 gap-2">
                   {project.referenceImages.map((img) => (
                     <div key={img.id} className="relative aspect-square rounded-lg overflow-hidden border border-gray-200 group">
-                      <img src={img.url} alt="Reference" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+                      {img.url && <img src={img.url} alt="Reference" referrerPolicy="no-referrer" className="w-full h-full object-cover" />}
                       
                       <button
                         onClick={() => {
@@ -417,6 +437,7 @@ export default function SidebarParams({
                   {project.referenceImages.length < 5 && (
                     <button
                       onClick={() => referenceInputRef.current?.click()}
+                      onPaste={(e) => handlePaste(e, 'reference')}
                       className="aspect-square border border-dashed border-gray-200 hover:border-blue-500 rounded-lg flex flex-col items-center justify-center bg-gray-50 text-gray-400 hover:text-blue-500 transition"
                     >
                       <Upload className="w-4 h-4" />
@@ -683,7 +704,7 @@ export default function SidebarParams({
           {!collapsed.prompt && (
             <div className="space-y-3 animate-fade-in text-xs">
               <textarea
-                placeholder="清晨的海边，人物迎着自然光站立，画面具有高级运动杂志摄影质感，重点表现服装的轻盈、透气和弹性。"
+                placeholder=""
                 value={project.originalPrompt}
                 onChange={(e) => onUpdateProject({ originalPrompt: e.target.value })}
                 maxLength={300}
@@ -695,24 +716,32 @@ export default function SidebarParams({
                 <span>{project.originalPrompt.length}/300字</span>
               </div>
 
-              {/* Optimize Prompt trigger */}
-              <button
-                onClick={onOptimizePrompt}
-                disabled={isOptimizing}
-                className="w-full py-2.5 rounded-xl border border-blue-200 bg-blue-50 hover:bg-blue-100 disabled:bg-gray-50 text-blue-700 font-semibold text-xs transition flex items-center justify-center gap-1.5 active:scale-98"
-              >
-                {isOptimizing ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
-                    AI 正在润饰深度细节...
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-3.5 h-3.5 text-blue-600 animate-pulse" />
-                    生成结构化提示词
-                  </>
-                )}
-              </button>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-[11px] font-bold text-slate-700">实际生图提示词（英文）</p>
+                    <p className="mt-0.5 text-[9px] text-slate-400">随选项实时更新，与提交给 Gemini 的完整文本指令一致</p>
+                  </div>
+                  {isPromptPreviewLoading && <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-500 shrink-0" />}
+                </div>
+                <textarea
+                  readOnly
+                  aria-label="实际生图提示词（英文）"
+                  value={isPromptPreviewLoading && !actualPromptPreview ? "正在编排实际生图提示词..." : actualPromptPreview}
+                  rows={9}
+                  className="w-full rounded-xl border border-slate-200 bg-white p-3 font-mono text-[10px] leading-relaxed text-slate-600 resize-y focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                />
+                <button
+                  type="button"
+                  disabled={!actualPromptPreview || isPromptPreviewLoading}
+                  onClick={() => copyPrompt(actualPromptPreview, "actual")}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-semibold text-slate-600 flex items-center justify-center gap-1.5 disabled:opacity-50"
+                >
+                  {copiedPrompt === "actual" ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copiedPrompt === "actual" ? "已复制实际提示词" : "复制实际提示词"}
+                </button>
+              </div>
+
 
               {project.optimizedPrompt && (
                 <div className="rounded-2xl border border-blue-100 bg-blue-50/60 p-3 space-y-2">

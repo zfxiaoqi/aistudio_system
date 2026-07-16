@@ -5,7 +5,6 @@ import CanvasArea from "./components/CanvasArea";
 import TaskPanel from "./components/TaskPanel";
 import HistoryPage from "./components/HistoryPage";
 import EditorModal from "./components/EditorModal";
-import VideoModal from "./components/VideoModal";
 import {
   getDefaultScene,
   getRecommendedTone,
@@ -13,7 +12,7 @@ import {
   type AssetAnalysis,
   type PromptImageInput,
 } from "./prompt-config/promptConfig";
-import { hydrateProjectImages, serializeProjectsWithoutImagePayloads } from "./data/imageAssetStore";
+import { hydrateProjectImages, serializeProjectsWithoutImagePayloads, serializeTasksWithoutImagePayloads } from "./data/imageAssetStore";
 
 import { PRODUCT_TEMPLATES, CHARACTER_TEMPLATES, REF_TEMPLATES } from "./data/mockAssets";
 import { Sparkles, Calendar, BookOpen, Layers, Clock, ArrowLeftRight, Check, Play, Settings, Plus, Save, Compass, HelpCircle, User, ChevronDown } from "lucide-react";
@@ -50,6 +49,32 @@ function getPromptAssets(project: Project): PromptImageInput[] {
   ];
 }
 
+function getPromptAssetMetadata(project: Project) {
+  return getPromptAssets(project).map(({ name, role, weight }) => ({ name, role, weight }));
+}
+
+const TASK_HISTORY_STORAGE_LIMIT = 30;
+
+function persistWorkspaceState(projects: Project[], tasks: Task[], currentProjectId: string) {
+  const compactTasks = serializeTasksWithoutImagePayloads(tasks.slice(0, TASK_HISTORY_STORAGE_LIMIT));
+  try {
+    // Replace the previously oversized task payload first so quota is released before other writes.
+    localStorage.setItem("badigao_tasks", JSON.stringify(compactTasks));
+    localStorage.setItem("badigao_projects", JSON.stringify(serializeProjectsWithoutImagePayloads(projects)));
+    localStorage.setItem("badigao_current_proj_id", currentProjectId);
+    return true;
+  } catch (error) {
+    console.warn("Workspace state could not be fully persisted:", error);
+    try {
+      localStorage.removeItem("badigao_tasks");
+      localStorage.setItem("badigao_tasks", JSON.stringify(compactTasks.slice(0, 10)));
+    } catch (fallbackError) {
+      console.warn("Compact task history fallback also failed:", fallbackError);
+    }
+    return false;
+  }
+}
+
 // Initial Demo Project and tasks to meet "演示项目" requirements
 const DEMO_PROJECT: Project = {
   id: "proj-demo-summer-2026",
@@ -71,6 +96,7 @@ const DEMO_PROJECT: Project = {
       url: "https://images.unsplash.com/photo-1518310383802-640c2de311b2?q=80&w=600"
     }
   ],
+  modelCount: 1,
   referenceImages: [
     {
       id: "ref-1",
@@ -88,7 +114,7 @@ const DEMO_PROJECT: Project = {
   resolution: "2K",
   aspectRatio: "3:4",
   imageCount: 1,
-  originalPrompt: "清晨自然光，真实自然的人物状态，高级运动杂志摄影质感，突出产品的版型、面料纹理和舒适感，保持人物形象与产品设计一致。",
+  originalPrompt: "",
   optimizedPrompt: "",
   negativePrompt: "",
   promptConfigVersion: "",
@@ -103,6 +129,7 @@ const DEMO_TASK: Task = {
   createdAt: new Date(Date.now() - 3600000).toISOString(), // 1 hour ago
   productImages: ["https://images.unsplash.com/photo-1571945153237-4929e78394a9?q=80&w=600"],
   characterImages: ["https://images.unsplash.com/photo-1518310383802-640c2de311b2?q=80&w=600"],
+  modelCount: 1,
   keepCharacter: true,
   referenceImages: [{ url: "https://images.unsplash.com/photo-1506126613408-eca07ce68773?q=80&w=600", weight: "high" }],
   visualType: "B",
@@ -114,7 +141,7 @@ const DEMO_TASK: Task = {
   resolution: "2K",
   aspectRatio: "3:4",
   imageCount: 1,
-  originalPrompt: "清晨自然光，真实自然的人物状态，高级运动杂志摄影质感，突出产品的版型、面料纹理和舒适感，保持人物形象与产品设计一致。",
+  originalPrompt: "",
   optimizedPrompt: "[巴迪高商业摄影] B类生活纪实影调。模特置身于清晨海边漫步，海浪微风。金蓝色日光柔和勾勒出运动内衣的双缝明线与纯棉透气肌理，真实面部锁死，3:4 比例，2K 极致解析力。",
   finalPrompt: "[巴迪高商业摄影] B类生活纪实影调。模特置身于清晨海边漫步，海浪微风。金蓝色日光柔和勾勒出运动内衣的双缝明线与纯棉透气肌理，真实面部锁死，3:4 比例，2K 极致解析力。",
   negativePrompt: "",
@@ -150,10 +177,11 @@ export default function App() {
   const [generatingProgress, setGeneratingProgress] = useState(0);
   const [generatingLogs, setGeneratingLogs] = useState<string[]>([]);
   const [generationError, setGenerationError] = useState("");
+  const [actualPromptPreview, setActualPromptPreview] = useState("");
+  const [isPromptPreviewLoading, setIsPromptPreviewLoading] = useState(false);
 
   // Editing Modals States
-  const [editingImgUrl, setEditingImgUrl] = useState<string | null>(null);
-  const [videoImgUrl, setVideoImgUrl] = useState<string | null>(null);
+  const [editingTarget, setEditingTarget] = useState<{ imageUrl: string; originalUrl: string } | null>(null);
 
   // Status Alerts
   const [showSavedNotification, setShowSavedNotification] = useState(false);
@@ -174,9 +202,13 @@ export default function App() {
 
         return {
           ...project,
+          modelCount: Number.isFinite(project.modelCount)
+            ? Math.max(0, Math.min(4, project.modelCount))
+            : Math.max(1, project.characterImages.length),
           scene,
           imageCount: shouldMigrateDefaultCount ? 1 : project.imageCount,
           tone: hasValidScene ? project.tone : getRecommendedTone(project.visualType, scene),
+          originalPrompt: (project.originalPrompt && project.originalPrompt === "清晨自然光，真实自然的人物状态，高级运动杂志摄影质感，突出产品的版型、面料纹理和舒适感，保持人物形象与产品设计一致。") ? "" : (project.originalPrompt || ""),
           optimizedPrompt: "",
           optimizedPromptEnglish: "",
           negativePrompt: "",
@@ -186,11 +218,21 @@ export default function App() {
           promptWarnings: [],
         };
       });
-      if (shouldMigrateDefaultCount) localStorage.setItem("badigao_default_image_count_v1", "done");
+      if (shouldMigrateDefaultCount) {
+        try {
+          localStorage.setItem("badigao_default_image_count_v1", "done");
+        } catch (error) {
+          console.warn("Default image count migration flag could not be saved:", error);
+        }
+      }
       setProjects(normalizedProjects);
       void hydrateProjectImages(normalizedProjects).then((hydratedProjects) => {
         setProjects(hydratedProjects);
-        localStorage.setItem("badigao_projects", JSON.stringify(serializeProjectsWithoutImagePayloads(hydratedProjects)));
+        try {
+          localStorage.setItem("badigao_projects", JSON.stringify(serializeProjectsWithoutImagePayloads(hydratedProjects)));
+        } catch (error) {
+          console.warn("Hydrated project metadata could not be persisted:", error);
+        }
       });
     }
     if (savedTasks) {
@@ -198,12 +240,18 @@ export default function App() {
         .filter((t: any) => t.taskId !== "task-demo-initial-shot")
         .map((task: Task) => ({
           ...task,
+          modelCount: Number.isFinite(task.modelCount) ? task.modelCount : Math.max(1, task.characterImages.length),
           negativePrompt: task.negativePrompt || "",
           promptConfigVersion: task.promptConfigVersion || "legacy",
           selectedPromptFragments: task.selectedPromptFragments || [],
           promptWarnings: task.promptWarnings || [],
         }));
       setTasks(parsedTasks);
+      try {
+        localStorage.setItem("badigao_tasks", JSON.stringify(serializeTasksWithoutImagePayloads(parsedTasks.slice(0, TASK_HISTORY_STORAGE_LIMIT))));
+      } catch (error) {
+        console.warn("Legacy task history could not be compacted:", error);
+      }
       if (parsedTasks.length > 0) {
         setActiveTaskId(parsedTasks[0].taskId);
       }
@@ -213,12 +261,63 @@ export default function App() {
 
   // Save to LocalStorage helper
   const saveStateToLocalStorage = (updatedProjs: Project[], updatedTasks: Task[]) => {
-    localStorage.setItem("badigao_projects", JSON.stringify(serializeProjectsWithoutImagePayloads(updatedProjs)));
-    localStorage.setItem("badigao_tasks", JSON.stringify(updatedTasks));
-    localStorage.setItem("badigao_current_proj_id", currentProjectId);
+    return persistWorkspaceState(updatedProjs, updatedTasks, currentProjectId);
   };
 
   const currentProject = projects.find(p => p.id === currentProjectId) || projects[0] || DEMO_PROJECT;
+
+  const promptPreviewPayload = React.useMemo(() => ({
+    visualType: currentProject.visualType,
+    scene: currentProject.scene,
+    productFunctions: currentProject.productFunctions,
+    shotScale: currentProject.shotScale,
+    cameraAngle: currentProject.cameraAngle,
+    tone: currentProject.tone,
+    originalPrompt: currentProject.originalPrompt,
+    resolution: currentProject.resolution,
+    aspectRatio: currentProject.aspectRatio,
+    imageCount: currentProject.imageCount,
+    modelCount: currentProject.modelCount,
+    productImages: currentProject.productImages.map((item) => item.name),
+    characterImages: currentProject.characterImages.map((item) => item.name),
+    referenceImages: currentProject.referenceImages.map((item) => item.name),
+    referenceImageWeights: currentProject.referenceImages.map((item) => ({
+      name: item.name,
+      weight: item.weight,
+    })),
+    prompt: currentProject.optimizedPromptEnglish || currentProject.optimizedPrompt || currentProject.originalPrompt,
+    negativePrompt: currentProject.negativePromptEnglish || currentProject.negativePrompt,
+    assetMetadata: getPromptAssetMetadata(currentProject),
+  }), [currentProject]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setIsPromptPreviewLoading(true);
+      try {
+        const response = await fetch("/api/gemini/prompt-preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(promptPreviewPayload),
+          signal: controller.signal,
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data?.error || "实际生图提示词生成失败。");
+        setActualPromptPreview(String(data.prompt || ""));
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        console.error("Prompt preview failed:", error);
+        setActualPromptPreview("实际生图提示词暂时无法生成，请检查本地服务。" );
+      } finally {
+        if (!controller.signal.aborted) setIsPromptPreviewLoading(false);
+      }
+    }, 260);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [promptPreviewPayload]);
 
   // Update current project parameters
   const handleUpdateProject = (updates: Partial<Project>) => {
@@ -259,6 +358,7 @@ export default function App() {
       lastSavedAt: new Date().toISOString(),
       productImages: [],
       characterImages: [],
+      modelCount: 1,
       referenceImages: [],
       visualType: "A",
       scene: "海边自在",
@@ -317,6 +417,7 @@ export default function App() {
           resolution: currentProject.resolution,
           aspectRatio: currentProject.aspectRatio,
           imageCount: currentProject.imageCount,
+          modelCount: currentProject.modelCount,
           productImages: currentProject.productImages.map(p => p.name || "巴迪高核心主图"),
           characterImages: currentProject.characterImages.map(c => c.name || "参考人物形象"),
           referenceImages: currentProject.referenceImages.map(r => r.name || "参考风格图"),
@@ -404,6 +505,7 @@ export default function App() {
           resolution: currentProject.resolution,
           aspectRatio: currentProject.aspectRatio,
           imageCount: currentProject.imageCount,
+          modelCount: currentProject.modelCount,
           productImages: currentProject.productImages.map((item) => item.name),
           characterImages: currentProject.characterImages.map((item) => item.name),
           referenceImages: currentProject.referenceImages.map((item) => item.name),
@@ -412,7 +514,14 @@ export default function App() {
           assets: getPromptAssets(currentProject),
         }),
       });
-      const data = await response.json();
+
+      let data;
+      try {
+        data = await response.json();
+      } catch (e) {
+        throw new Error(`服务响应格式错误 (${response.status} ${response.statusText})`);
+      }
+
       if (!response.ok) throw new Error(data?.error || "真实生图失败，请稍后重试。");
       const generatedUrls = Array.isArray(data.results) ? data.results.map(String) : [];
       if (generatedUrls.length === 0) throw new Error("模型未返回图片结果。");
@@ -426,6 +535,7 @@ export default function App() {
           createdAt: new Date().toISOString(),
           productImages: currentProject.productImages.map(p => p.url),
           characterImages: currentProject.characterImages.map(p => p.url),
+          modelCount: currentProject.modelCount,
           keepCharacter: currentProject.keepCharacter,
           referenceImages: currentProject.referenceImages.map(r => ({ url: r.url, weight: r.weight })),
           visualType: currentProject.visualType,
@@ -478,6 +588,7 @@ export default function App() {
       resolution: task.resolution,
       aspectRatio: task.aspectRatio,
       imageCount: task.imageCount,
+      modelCount: task.modelCount,
       originalPrompt: task.originalPrompt,
       optimizedPrompt: task.optimizedPrompt,
       optimizedPromptEnglish: task.optimizedPromptEnglish || "",
@@ -518,27 +629,6 @@ export default function App() {
       return task;
     });
     setTasks(updated);
-    setEditingImgUrl(null);
-    saveStateToLocalStorage(projects, updated);
-  };
-
-  // Canvas Image Video Gen Callback: Save converted video definitions
-  const handleSaveVideo = (imageUrl: string, videoUrl: string, motion: string, duration: number, strength: string) => {
-    const updated = tasks.map(task => {
-      if (task.taskId === activeTaskId) {
-        const currentVideos = task.videos[imageUrl] || [];
-        return {
-          ...task,
-          videos: {
-            ...task.videos,
-            [imageUrl]: [...currentVideos, { url: videoUrl, motion, duration, strength }]
-          }
-        };
-      }
-      return task;
-    });
-    setTasks(updated);
-    setVideoImgUrl(null);
     saveStateToLocalStorage(projects, updated);
   };
 
@@ -676,6 +766,8 @@ export default function App() {
                 isOptimizing={isOptimizing}
                 onGenerate={handleGenerateBrandVisual}
                 isGenerating={isGenerating}
+                actualPromptPreview={actualPromptPreview}
+                isPromptPreviewLoading={isPromptPreviewLoading}
               />
             </div>
 
@@ -687,8 +779,7 @@ export default function App() {
               generatingProgress={generatingProgress}
               generatingLogs={generatingLogs}
               generationError={generationError}
-              onOpenEditor={(url) => setEditingImgUrl(url)}
-              onOpenVideo={(url) => setVideoImgUrl(url)}
+              onOpenEditor={(imageUrl, originalUrl) => setEditingTarget({ imageUrl, originalUrl })}
               onRecreateSimilar={(url) => {
                 alert("将参考此生成的构图进行类似重建...");
                 handleOptimizePrompt();
@@ -736,24 +827,17 @@ export default function App() {
       {/* 3. DYNAMIC MODALS OVERLAYS */}
       
       {/* 3.1 Local Image Mask Editor Modal */}
-      {editingImgUrl && (
+      {editingTarget && (
         <EditorModal
-          imageUrl={editingImgUrl}
-          onClose={() => setEditingImgUrl(null)}
+          imageUrl={editingTarget.imageUrl}
+          originalUrl={editingTarget.originalUrl}
+          versions={activeTask?.editVersions[editingTarget.originalUrl] || []}
+          onClose={() => setEditingTarget(null)}
           onSaveEditedVersion={handleSaveEditedVersion}
         />
       )}
 
-      {/* 3.2 Video motion generator modal */}
-      {videoImgUrl && (
-        <VideoModal
-          imageUrl={videoImgUrl}
-          onClose={() => setVideoImgUrl(null)}
-          onSaveVideo={handleSaveVideo}
-        />
-      )}
-
-      {/* 3.3 Create New Project Modal */}
+      {/* 3.2 Create New Project Modal */}
       {showNewProjModal && (
         <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-6 w-full max-w-md border border-gray-100 shadow-2xl space-y-4 animate-scale-up text-xs text-gray-800">

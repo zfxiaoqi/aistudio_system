@@ -1,6 +1,8 @@
 import React, { useState } from "react";
 import { Task, Project } from "../types";
-import { ZoomIn, Edit, Download, Video, Info, Sparkles, RefreshCw, Layers, Check, Copy, ChevronLeft, ChevronRight, X, Maximize2, Minimize2, CheckCircle2 } from "lucide-react";
+import { ZoomIn, Edit, Download, Info, Sparkles, RefreshCw, Layers, Check, Copy, ChevronLeft, ChevronRight, X, Maximize2, Minimize2, CheckCircle2 } from "lucide-react";
+import JSZip from "jszip";
+import { saveAs } from "file-saver";
 
 interface CanvasAreaProps {
   currentTask: Task | null;
@@ -9,8 +11,7 @@ interface CanvasAreaProps {
   generatingProgress: number;
   generatingLogs: string[];
   generationError: string;
-  onOpenEditor: (url: string) => void;
-  onOpenVideo: (url: string) => void;
+  onOpenEditor: (imageUrl: string, originalUrl: string) => void;
   onRecreateSimilar: (url: string) => void;
   onSetAsReference: (url: string) => void;
 }
@@ -23,7 +24,6 @@ export default function CanvasArea({
   generatingLogs,
   generationError,
   onOpenEditor,
-  onOpenVideo,
   onRecreateSimilar,
   onSetAsReference
 }: CanvasAreaProps) {
@@ -41,14 +41,35 @@ export default function CanvasArea({
   const showOverlays = false;
 
   // Download logic (creates a standard download trigger)
-  const downloadImage = (url: string, index: number) => {
-    const filename = `${project.name.replace(/\s+/g, '_')}_${project.visualType}_${project.scene || 'Feature'}_2026_${index + 1}.png`;
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const downloadImage = async (url: string, index: number) => {
+    try {
+      const response = await fetch(url);
+      const blob = await response.blob();
+      const filename = `${project.name.replace(/\s+/g, '_')}_${project.visualType}_${project.scene || 'Feature'}_2026_${index + 1}.png`;
+      saveAs(blob, filename);
+    } catch (e) {
+      console.error("Download failed", e);
+      // Fallback
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${project.name.replace(/\s+/g, '_')}_${index + 1}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  };
+
+  const downloadBatch = async (task: Task) => {
+    if (!task.results || task.results.length === 0) return;
+    const zip = new JSZip();
+    for (let i = 0; i < task.results.length; i++) {
+      const url = task.results[i];
+      const response = await fetch(url);
+      const blob = await response.blob();
+      zip.file(`${project.name.replace(/\s+/g, '_')}_${project.visualType}_${project.scene || 'Feature'}_2026_${i + 1}.png`, blob);
+    }
+    const content = await zip.generateAsync({ type: "blob" });
+    saveAs(content, `${project.name.replace(/\s+/g, '_')}_batch_download.zip`);
   };
 
   const copyPromptToClipboard = (text: string, id: string) => {
@@ -279,7 +300,10 @@ export default function CanvasArea({
             </div>
             
             <div className="flex flex-wrap items-center gap-3">
-              <button className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold transition shadow-sm">
+              <button
+                onClick={() => currentTask && downloadBatch(currentTask)}
+                className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold transition shadow-sm"
+              >
                 <Download className="w-3.5 h-3.5" />
                 打包批量下载 (.zip)
               </button>
@@ -326,7 +350,7 @@ export default function CanvasArea({
                 ...(currentTask?.referenceImages.map((item) => ({ url: item.url, label: `风格 · ${item.weight === "high" ? "高" : item.weight === "low" ? "低" : "中"}` })) || []),
               ].map((item, index) => (
                 <div key={`${item.label}-${index}`} className="relative w-16 h-16 shrink-0 rounded-xl overflow-hidden border border-slate-200 bg-slate-100">
-                  <img src={item.url} alt={item.label} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                  {item.url && <img src={item.url} alt={item.label} className="w-full h-full object-cover" referrerPolicy="no-referrer" />}
                   <span className="absolute inset-x-0 bottom-0 bg-slate-950/70 text-white text-[8px] text-center py-0.5">{item.label}</span>
                 </div>
               ))}
@@ -611,21 +635,13 @@ export default function CanvasArea({
 
                       {/* Brush Paint Editor */}
                       <button
-                        onClick={() => onOpenEditor(displayUrl)}
+                        onClick={() => onOpenEditor(displayUrl, imgUrl)}
                         className="p-2.5 rounded-full bg-white/90 hover:bg-white text-slate-800 transition transform translate-y-2 group-hover:translate-y-0 duration-300 hover:scale-105 delay-75"
                         title="局部涂抹涂红修改"
                       >
                         <Edit className="w-4 h-4" />
                       </button>
 
-                      {/* Video Motion Gen */}
-                      <button
-                        onClick={() => onOpenVideo(displayUrl)}
-                        className="p-2.5 rounded-full bg-white/90 hover:bg-white text-slate-800 transition transform translate-y-2 group-hover:translate-y-0 duration-300 hover:scale-105 delay-100"
-                        title="静态图智能转视频"
-                      >
-                        <Video className="w-4 h-4" />
-                      </button>
                     </div>
                   </div>
 
@@ -1031,18 +1047,15 @@ export default function CanvasArea({
             
             <div className="flex gap-2">
               <button
-                onClick={() => onOpenEditor(currentTask.results[previewIndex!])}
+                onClick={() => {
+                  const originalUrl = currentTask.results[previewIndex!];
+                  const versions = currentTask.editVersions[originalUrl] || [];
+                  onOpenEditor(versions[versions.length - 1] || originalUrl, originalUrl);
+                }}
                 className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl transition flex items-center gap-1.5"
               >
                 <Edit className="w-4 h-4" />
                 局部重绘修改
-              </button>
-              <button
-                onClick={() => onOpenVideo(currentTask.results[previewIndex!])}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl transition flex items-center gap-1.5"
-              >
-                <Video className="w-4 h-4" />
-                转化为宣传视频
               </button>
               <button
                 onClick={() => downloadImage(currentTask.results[previewIndex!], previewIndex!)}

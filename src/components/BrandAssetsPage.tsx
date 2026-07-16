@@ -225,12 +225,12 @@ export default function BrandAssetsPage({ onApplyPromptTemplate, onApplyColorPal
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {BADIGAO_BRAND_ASSETS.productTemplates.map((prod) => (
             <div key={prod.id} className="group relative overflow-hidden rounded-xl border border-gray-100 bg-gray-50 hover:shadow-md transition">
-              <img
+              {prod.url && <img
                 src={prod.url}
                 alt={prod.name}
                 referrerPolicy="no-referrer"
                 className="w-full h-48 object-cover group-hover:scale-105 transition duration-500"
-              />
+              />}
               <div className="p-3 bg-white border-t border-gray-100 flex items-center justify-between">
                 <span className="text-xs font-semibold text-gray-700 truncate max-w-[80%]">{prod.name}</span>
                 <span className="text-[10px] text-blue-600 font-mono bg-blue-50 px-1.5 py-0.5 rounded">

@@ -1,4 +1,4 @@
-import type { ImageAsset, Project, ReferenceImage } from "../types";
+import type { ImageAsset, Project, ReferenceImage, Task } from "../types";
 
 const DB_NAME = "badigao-image-assets";
 const STORE_NAME = "images";
@@ -82,5 +82,25 @@ export function serializeProjectsWithoutImagePayloads(projects: Project[]) {
     productImages: project.productImages.map(strip),
     characterImages: project.characterImages.map(strip),
     referenceImages: project.referenceImages.map(strip),
+  }));
+}
+
+export function serializeTasksWithoutImagePayloads(tasks: Task[]) {
+  const stripDataUrl = (url: string) => url.startsWith("data:image/") ? "" : url;
+
+  return tasks.map((task) => ({
+    ...task,
+    productImages: task.productImages.map(stripDataUrl),
+    characterImages: task.characterImages.map(stripDataUrl),
+    referenceImages: task.referenceImages.map((reference) => ({
+      ...reference,
+      url: stripDataUrl(reference.url),
+    })),
+    results: task.results.map(stripDataUrl),
+    editVersions: Object.fromEntries(
+      Object.entries(task.editVersions)
+        .filter(([sourceUrl]) => !sourceUrl.startsWith("data:image/"))
+        .map(([sourceUrl, versions]) => [sourceUrl, versions.map(stripDataUrl).filter(Boolean)]),
+    ),
   }));
 }
