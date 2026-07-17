@@ -9,10 +9,13 @@ import {
   getSceneOptions,
   IMAGE_COUNT_OPTIONS,
   RESOLUTION_OPTIONS,
+  REPLACEMENT_MODE_OPTIONS,
   SELLING_POINT_OPTIONS,
   SHOT_SCALE_OPTIONS,
   TONE_OPTIONS,
   VISUAL_TYPE_OPTIONS,
+  type ReplacementModeId,
+  type VisualTypeId,
 } from "../prompt-config/promptConfig";
 import { prepareImageForReference } from "../data/imagePreparation";
 import { deleteImageData, saveImageData } from "../data/imageAssetStore";
@@ -144,7 +147,7 @@ export default function SidebarParams({
           name: file.name,
           url: prepared.dataUrl,
           weight: "medium",
-          role: "style_reference",
+          role: project.visualType === "R" ? "replacement_reference" : "style_reference",
           mimeType: prepared.mimeType,
           width: prepared.width,
           height: prepared.height,
@@ -210,13 +213,21 @@ export default function SidebarParams({
 
 
   // Switch visual type and reset sub-choices
-  const handleVisualTypeChange = (type: 'A' | 'B' | 'C') => {
+  const handleVisualTypeChange = (type: VisualTypeId) => {
     const scene = getDefaultScene(type);
     onUpdateProject({
       visualType: type,
       scene,
       tone: getRecommendedTone(type, scene),
-      productFunctions: type === 'C' ? ["透气", "亲肤柔软不扎"] : []
+      productFunctions: type === 'C' ? ["透气", "亲肤柔软不扎"] : [],
+      replacementMode: type === "R" ? (project.replacementMode || "服装+场景替换") : project.replacementMode,
+      referenceImages: project.referenceImages.map((asset) => ({
+        ...asset,
+        role: type === "R" ? "replacement_reference" : "style_reference",
+        analysis: asset.analysis?.role === (type === "R" ? "replacement_reference" : "style_reference")
+          ? asset.analysis
+          : undefined,
+      })),
     });
   };
 
@@ -391,8 +402,11 @@ export default function SidebarParams({
               {/* Reference Style Images (Max 5, weight selection) */}
               <div className="space-y-2 pt-1">
                 <div className="flex items-center justify-between">
-                  <span className="font-semibold text-gray-700">参考风格图 <span className="text-gray-400 font-normal">(选填, 最多5张)</span></span>
-                  <span className="text-[10px] text-gray-400">控制光影、构图与影调</span>
+                  <span className="font-semibold text-gray-700">
+                    {project.visualType === "R" ? "替换参考图" : "参考风格图"}
+                    <span className="text-gray-400 font-normal">({project.visualType === "R" ? "必填" : "选填"}, 最多5张)</span>
+                  </span>
+                  <span className="text-[10px] text-gray-400">{project.visualType === "R" ? "精确复刻姿势、动作、视角、构图" : "控制光影、构图与影调"}</span>
                 </div>
 
                 <div className="grid grid-cols-4 gap-2">
@@ -468,12 +482,12 @@ export default function SidebarParams({
           {!collapsed.visualType && (
             <div className="space-y-4 animate-fade-in text-xs">
               
-              {/* Type A, B, C Cards */}
-              <div className="grid grid-cols-3 gap-2">
+              {/* Type A, B, C and replacement cards */}
+              <div className="grid grid-cols-2 gap-2">
                 {VISUAL_TYPE_OPTIONS.map((type) => (
                   <button
                     key={type.id}
-                    onClick={() => handleVisualTypeChange(type.id as 'A' | 'B' | 'C')}
+                    onClick={() => handleVisualTypeChange(type.id as VisualTypeId)}
                     className={`p-3 rounded-xl border text-left flex flex-col justify-between transition ${
                       project.visualType === type.id
                         ? "border-blue-600 bg-blue-50/50 text-blue-900 shadow-sm"
@@ -489,7 +503,9 @@ export default function SidebarParams({
               {/* Sub option block (A Scenarios / B Scenarios / C features list) */}
               {project.visualType !== 'C' ? (
                 <div className="space-y-2">
-                  <label className="font-semibold text-gray-700 block">选择单选场景</label>
+                  <label className="font-semibold text-gray-700 block">
+                    {project.visualType === "R" ? "选择A类目标场景" : "选择单选场景"}
+                  </label>
                   <div className="grid grid-cols-2 gap-2">
                     {/* SCENARIOS FOR A or B */}
                     {sceneOptions.map((sceneOption) => (
@@ -510,6 +526,11 @@ export default function SidebarParams({
                       </button>
                     ))}
                   </div>
+                  {project.visualType === "R" && (
+                    <p className="text-[10px] leading-relaxed text-gray-400">
+                      目标场景仅在“服装+场景替换”中完全生效；产品替换和服装替换会严格保留参考图原场景。
+                    </p>
+                  )}
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -534,6 +555,36 @@ export default function SidebarParams({
                         </button>
                       );
                     })}
+                  </div>
+                </div>
+              )}
+
+              {project.visualType === "R" && (
+                <div className="space-y-2 rounded-xl border border-blue-100 bg-blue-50/40 p-3">
+                  <div>
+                    <label className="font-semibold text-blue-900 block">选择替换模式 <span className="text-red-500">*</span></label>
+                    <p className="mt-1 text-[10px] leading-relaxed text-blue-700/70">
+                      百分百复刻参考图的姿势、动作、图片视角与构图；人物身份和光影调性不作要求。
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2">
+                    {REPLACEMENT_MODE_OPTIONS.map((option) => (
+                      <button
+                        key={option.id}
+                        type="button"
+                        onClick={() => onUpdateProject({ replacementMode: option.id as ReplacementModeId })}
+                        className={`rounded-xl border px-3 py-2.5 text-left transition ${
+                          project.replacementMode === option.id
+                            ? "border-blue-600 bg-blue-600 text-white shadow-sm"
+                            : "border-blue-100 bg-white text-gray-700 hover:border-blue-300"
+                        }`}
+                      >
+                        <span className="block text-[11px] font-bold">{option.label}</span>
+                        <span className={`mt-1 block text-[9px] leading-normal ${project.replacementMode === option.id ? "text-blue-100" : "text-gray-400"}`}>
+                          {option.description}
+                        </span>
+                      </button>
+                    ))}
                   </div>
                 </div>
               )}
@@ -798,10 +849,16 @@ export default function SidebarParams({
             <span>尚未上传 <strong>打底产品主图</strong>，请在上方【打底素材】中上传，或一键导入推荐模板。</span>
           </div>
         )}
+        {project.visualType === "R" && project.referenceImages.length === 0 && (
+          <div className="p-2.5 rounded-xl bg-orange-50 border border-orange-100 flex items-start gap-2 text-orange-800 text-[10px]">
+            <AlertCircle className="w-4 h-4 text-orange-600 shrink-0 mt-0.5" />
+            <span>替换模式必须上传至少一张<strong>替换参考图</strong>，用于复刻姿势、动作、图片视角和构图。</span>
+          </div>
+        )}
         
         <button
           onClick={onGenerate}
-          disabled={isGenerating || project.productImages.length === 0}
+          disabled={isGenerating || project.productImages.length === 0 || (project.visualType === "R" && project.referenceImages.length === 0)}
           className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white py-3.5 rounded-2xl text-sm font-semibold shadow-md active:scale-98 transition flex items-center justify-center gap-2"
         >
           {isGenerating ? (

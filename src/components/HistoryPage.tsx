@@ -59,6 +59,7 @@ export default function HistoryPage({
       task.originalPrompt.toLowerCase().includes(searchTerm.toLowerCase()) ||
       task.optimizedPrompt.toLowerCase().includes(searchTerm.toLowerCase()) ||
       (task.scene && task.scene.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      (task.replacementMode && task.replacementMode.toLowerCase().includes(searchTerm.toLowerCase())) ||
       task.productFunctions.some(f => f.toLowerCase().includes(searchTerm.toLowerCase()));
 
     const matchProject = selectedProjectType === "all" || task.projectId === selectedProjectType;
@@ -161,6 +162,7 @@ export default function HistoryPage({
             { value: "A", label: "A 类：品牌情绪与生活方式", description: "突出品牌氛围与生活方式" },
             { value: "B", label: "B 类：真实使用与功能证据", description: "通过真实动作表现功能" },
             { value: "C", label: "C 类：产品功能与卖点特写", description: "聚焦产品细节与卖点" },
+            { value: "R", label: "替换模式：参考图定向替换", description: "锁定参考维度并替换指定内容" },
           ]}
         />
 
@@ -229,8 +231,13 @@ export default function HistoryPage({
                   {/* Badges on Cover */}
                   <div className="absolute top-3 left-3 flex flex-wrap gap-1.5 pointer-events-none">
                     <span className="text-[10px] font-bold text-white bg-black/70 px-2 py-0.5 rounded-full uppercase tracking-wider backdrop-blur-sm">
-                      {task.visualType}类视觉
+                      {task.visualType === "R" ? "替换模式" : `${task.visualType}类视觉`}
                     </span>
+                    {task.replacementMode && task.visualType === "R" && (
+                      <span className="text-[10px] font-semibold text-white bg-violet-600/85 px-2 py-0.5 rounded-full backdrop-blur-sm">
+                        {task.replacementMode}
+                      </span>
+                    )}
                     {task.scene && (
                       <span className="text-[10px] font-semibold text-white bg-blue-600/85 px-2 py-0.5 rounded-full backdrop-blur-sm">
                         {task.scene}

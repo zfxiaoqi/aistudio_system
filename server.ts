@@ -6,6 +6,7 @@ import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, type Part } from "@google/genai";
 import { fetch as undiciFetch, FormData as UndiciFormData, Agent, ProxyAgent } from "undici";
+import sharp from "sharp";
 import {
   type AssetAnalysis,
   compilePrompt,
@@ -44,12 +45,16 @@ try {
 }
 
 function normalizePromptInput(body: Record<string, unknown>): PromptCompileInput {
-  const visualType = (["A", "B", "C"].includes(String(body.visualType))
+  const visualType = (["A", "B", "C", "R"].includes(String(body.visualType))
     ? String(body.visualType)
     : "A") as VisualTypeId;
+  const replacementMode = (["服装+场景替换", "产品替换", "服装替换"].includes(String(body.replacementMode))
+    ? String(body.replacementMode)
+    : "服装+场景替换") as PromptCompileInput["replacementMode"];
 
   return {
     visualType,
+    replacementMode,
     scene: typeof body.scene === "string" ? body.scene : undefined,
     productFunctions: Array.isArray(body.productFunctions) ? body.productFunctions.map(String) : [],
     shotScale: typeof body.shotScale === "string" ? body.shotScale : "中景",
@@ -181,13 +186,15 @@ function normalizeGeminiImageResolution(resolution: string) {
 const GEMINI_REFERENCE_BOUNDARY = `
 [REFERENCE ROLE BOUNDARY — MANDATORY]
 Every uploaded image has one and only one role. Never merge roles between images.
+- REPLACEMENT REFERENCE: reproduce pose, action, camera viewpoint, shot scale, crop, reference aspect ratio, subject placement, negative space, and composition exactly. Do not inherit person identity, face, body traits, garment design, lighting, color temperature, brightness hierarchy, or tonal mood from this image.
 - STYLE REFERENCE: may influence photographic style, pose, action, crop, camera placement, background, furniture, props, architecture, object placement, and composition. Do not reproduce its subject, character identity, face, body, or garment design.
+- CHARACTER + GARMENT REFERENCE: preserve adult identity, facial features, hairstyle, and body proportions; also reference clothing placement, styling relationship, overall silhouette, coverage, natural folds, and pose-to-garment fit. Product design details must still come from PRODUCT MASTER/DETAIL.
 - CHARACTER IDENTITY: preserve only the adult person's identity, facial features, hairstyle, and body proportions. Do not copy clothing, pose, crop, background, lighting, or scene objects.
 - PRODUCT MASTER/DETAIL: preserve only the product's design, construction, color, texture, seams, proportions, and visible brand structure. Do not copy the source background, body pose, crop, or surrounding objects.
 The requested scene and camera settings must create a commercially usable photograph while respecting every reference role boundary.
 `;
 
-const GEMINI_FINAL_COMPLIANCE = "FINAL COMPLIANCE CHECK: A style reference may influence the visual style, pose, action, crop, camera placement, background, props, object placement, and composition, but must never supply the subject, character identity, face, body, or garment design. Preserve product fidelity and character identity from their dedicated references.";
+const GEMINI_FINAL_COMPLIANCE = "FINAL COMPLIANCE CHECK: In replacement mode, reproduce the replacement reference pose, action, camera viewpoint, shot scale, crop, aspect ratio, subject placement, negative space, and composition exactly. Do not inherit its person identity, face, body traits, garment design, lighting, color temperature, brightness hierarchy, or tonal mood. Person appearance comes from the character reference or brand standard; product design comes from product master; lighting and tone come from the selected scene and UI settings.";
 const GEMINI_SAFE_COMMERCIAL_FRAMING = "Depict clearly adult professional models only. Present the apparel in a neutral, non-sexualized commercial catalog and brand-campaign context, with natural posture and product-focused framing.";
 const GEMINI_NO_PEOPLE_FRAMING = "Create a strictly people-free commercial product photograph. Do not depict any person, model, face, hand, skin, body part, human reflection, or human-shaped mannequin. Use only the product, scene, styling surfaces, props, lighting, and abstract photographic direction.";
 type GeminiReferenceMetadata = Pick<PromptImageInput, "name" | "role" | "weight">;
@@ -201,7 +208,9 @@ function getGeminiReferenceInstruction(asset: GeminiReferenceMetadata, index: nu
   } as const;
 
   const roleRules: Record<ImageReferenceRole, string> = {
+    replacement_reference: "ROLE = EXACT POSE/ACTION/VIEW/COMPOSITION REFERENCE. Reproduce pose, action, camera viewpoint, shot scale, crop, reference aspect ratio, subject placement, negative space, and composition exactly. Ignore and replace this image's person identity, face, body traits, garment design, lighting, color temperature, brightness hierarchy, and tonal mood.",
     style_reference: `ROLE = STYLE REFERENCE ONLY. ${weightRules[weight]} Forbidden from this image: subject, character identity, face, body, and garment design.`,
+    character_garment_reference: "ROLE = CHARACTER + GARMENT-WEARING REFERENCE. Preserve adult identity, facial features, hairstyle, and body proportions. Also reference clothing placement, styling relationship, overall silhouette, coverage, natural folds, and pose-to-garment fit. Never copy source product design over the PRODUCT MASTER; product silhouette, waistband, leg openings, seams, texture, color, and brand structure come from the dedicated product reference.",
     character_identity: "ROLE = CHARACTER IDENTITY ONLY. Preserve adult identity, facial features, hairstyle, and body proportions. Ignore and replace the source clothing, pose, crop, background, lighting, and props.",
     product_master: "ROLE = PRODUCT MASTER. Preserve product silhouette, construction, color, texture, seams, binding, proportions, and visible brand structure with highest fidelity. Ignore the source background, pose, crop, and surrounding objects.",
     product_detail: "ROLE = PRODUCT DETAIL. Preserve only the visible material and construction details. Do not inherit the source scene, pose, crop, or unrelated objects.",
@@ -212,20 +221,33 @@ function getGeminiReferenceInstruction(asset: GeminiReferenceMetadata, index: nu
 
 function orderGeminiReferences<T extends GeminiReferenceMetadata>(assets: T[]) {
   const rolePriority: Record<ImageReferenceRole, number> = {
-    style_reference: 0,
-    character_identity: 1,
-    product_detail: 2,
-    product_master: 3,
+    replacement_reference: 0,
+    style_reference: 1,
+    character_garment_reference: 2,
+    character_identity: 3,
+    product_detail: 4,
+    product_master: 5,
   };
   return [...assets].sort((a, b) => rolePriority[a.role] - rolePriority[b.role]);
 }
 
-function buildGeminiGenerationPrompt(basePrompt: string, negativePrompt: string, index: number, imageCount: number, modelCount: number) {
+function buildGeminiGenerationPrompt(
+  basePrompt: string,
+  negativePrompt: string,
+  index: number,
+  imageCount: number,
+  modelCount: number,
+  isReplacement = false,
+) {
   const noPeople = modelCount === 0;
   return [
     basePrompt,
     `[COMMERCIAL SAFETY FRAMING]\n${noPeople ? GEMINI_NO_PEOPLE_FRAMING : GEMINI_SAFE_COMMERCIAL_FRAMING}`,
-    `[BATCH VARIATION]\nThis is image ${index + 1} of ${imageCount}. Preserve the product, brand rules, and all reference-image responsibilities.${noPeople ? " Keep every image strictly people-free. Vary only product arrangement, camera position, framing, or subtle composition." : " Preserve character identity. Vary only pose, framing, or subtle composition where reasonable."}`,
+    `[BATCH VARIATION]\nThis is image ${index + 1} of ${imageCount}. Preserve the product, brand rules, and all reference-image responsibilities.${isReplacement
+      ? " This is replacement mode: reproduce the replacement-reference pose, action, camera viewpoint, shot scale, crop, aspect ratio, subject placement, negative space, and composition exactly. Do not inherit its person or lighting tone."
+      : noPeople
+      ? " Keep every image strictly people-free. Vary only product arrangement, camera position, framing, or subtle composition."
+      : " Preserve character identity. Vary only pose, framing, or subtle composition where reasonable."}`,
     negativePrompt ? `[MUST AVOID]\n${negativePrompt}` : "",
   ].filter(Boolean).join("\n\n");
 }
@@ -243,16 +265,23 @@ function buildChinesePromptPreview(
   assets: GeminiReferenceMetadata[],
   imageCount: number,
   modelCount: number,
+  isReplacement = false,
 ) {
   const roleLabels: Record<ImageReferenceRole, string> = {
     product_master: "产品主参考图",
     product_detail: "产品细节参考图",
     character_identity: "人物身份参考图",
+    character_garment_reference: "人物与服装参考图",
     style_reference: "风格参考图",
+    replacement_reference: "替换构图参考图",
   };
   const referenceBlocks = orderGeminiReferences(assets).map((asset, index) => {
     const weight = asset.weight === "high" ? "高" : asset.weight === "low" ? "低" : "中";
-    const boundary = asset.role === "product_master" || asset.role === "product_detail"
+    const boundary = asset.role === "replacement_reference"
+      ? "姿势、动作、图片视角和构图必须百分百复刻，包括肢体角度、动作状态、机位、景别、裁切、参考画幅、人物位置占比、留白和空间关系；不得参考人物身份、面孔、身体特征、服装设计或光影调性。"
+      : asset.role === "character_garment_reference"
+      ? "保持人物身份、五官、发型和体型，并参考服装的穿着位置、搭配、廓形、覆盖范围、自然褶皱及姿势贴合；巴迪高产品设计细节仍严格服从产品主参考图。"
+      : asset.role === "product_master" || asset.role === "product_detail"
       ? "仅锁定产品外观、结构、材质和细节，不复制原图背景与构图。"
       : asset.role === "character_identity"
       ? "仅保持成年人物身份、五官、发型和体型，不复制服装、姿势、裁切、背景与光线。"
@@ -265,12 +294,14 @@ function buildChinesePromptPreview(
     `【商业安全构图】\n${modelCount === 0
       ? "严格保持无人画面，不得出现人物、人体局部、手、脸、皮肤、人物倒影或人形模特。"
       : "保持成年人物、自然姿态、非情色表达和可信人体结构，产品必须清晰、完整且无遮挡。"}`,
-    `【批次变化】\n本次生成${imageCount}张。保持产品、品牌规则与参考图职责一致，仅对动作、取景或细微构图做合理变化。`,
+    `【批次变化】\n本次生成${imageCount}张。${isReplacement
+      ? "替换模式中每张图都必须百分百复刻参考图的姿势、动作、图片视角和构图；参考图人物和光影调性不作要求。"
+      : "保持产品、品牌规则与参考图职责一致，仅对动作、取景或细微构图做合理变化。"}`,
     negativePrompt ? `【必须避免】\n${negativePrompt}` : "",
     referenceBlocks.length
       ? `【参考图使用边界】\n${referenceBlocks.join("\n\n")}`
       : "【参考图使用边界】\n本次没有附加参考图。",
-    "【最终执行要求】\n风格参考图可影响视觉风格、姿势、动作、裁切、机位、背景、道具、物体位置与构图，但禁止复制其主体、人物身份、脸、身体和服装设计；产品与人物参考图继续严格遵守各自角色边界。",
+    "【最终执行要求】\n替换模式必须百分百复刻替换参考图的姿势、动作、图片视角和构图；替换参考图的人物身份、面孔、身体特征、服装设计和光影调性不作为要求。人物服从人物参考图或品牌规范，产品服从产品主图，光影服从所选场景与页面色调。",
   ].filter(Boolean).join("\n\n");
 }
 
@@ -280,7 +311,9 @@ function normalizeReferenceMetadata(value: unknown): GeminiReferenceMetadata[] {
     "product_master",
     "product_detail",
     "character_identity",
+    "character_garment_reference",
     "style_reference",
+    "replacement_reference",
   ]);
   return value.slice(0, MAX_REFERENCE_IMAGES).map((raw, index) => {
     const asset = (raw || {}) as Record<string, unknown>;
@@ -430,17 +463,43 @@ async function loadEditableImage(imageUrl: string) {
   throw new Error("无法读取待编辑原图，请重新打开生成结果后再试。");
 }
 
+function getClosestGeminiAspectRatio(width: number, height: number) {
+  const ratio = width / height;
+  const supported = [
+    { label: "1:1", value: 1 },
+    { label: "2:3", value: 2 / 3 },
+    { label: "3:2", value: 3 / 2 },
+    { label: "3:4", value: 3 / 4 },
+    { label: "4:3", value: 4 / 3 },
+    { label: "9:16", value: 9 / 16 },
+    { label: "16:9", value: 16 / 9 },
+  ];
+  return supported.reduce((closest, candidate) =>
+    Math.abs(candidate.value - ratio) < Math.abs(closest.value - ratio) ? candidate : closest
+  ).label;
+}
+
+function getGeminiImageSizeForDimensions(width: number, height: number) {
+  const longEdge = Math.max(width, height);
+  if (longEdge >= 2800) return "4K";
+  if (longEdge >= 1600) return "2K";
+  return "1K";
+}
+
 async function requestGeminiImageEdit(args: {
   original: { mimeType: string; data: string };
   mask: { mimeType: string; data: string };
   replacement?: { mimeType: string; data: string; name: string };
   prompt: string;
+  outputWidth: number;
+  outputHeight: number;
 }) {
   const model = process.env.GEMINI_IMAGE_MODEL || "gemini-3-pro-image";
   const instruction = `
 [LOCAL INPAINTING TASK]
 Edit the first image according to the user's request. The second image is a transparent PNG mask: red or non-transparent pixels mark the only editable region.
 Modify only pixels inside the marked region. Preserve everything outside the mask as faithfully as possible, including identity, product design, garment structure, color, lighting, background, camera, crop, anatomy, and resolution.
+The returned image must keep the source aspect ratio and target resolution of ${args.outputWidth}×${args.outputHeight} pixels. Never reduce the output resolution.
 Blend the edited boundary naturally without halos, seams, color discontinuity, duplicated body parts, or unrelated changes. Do not add text, logos, watermarks, borders, or new objects unless explicitly requested.
 ${args.replacement ? "The third image is a local replacement reference. Use its relevant subject, product, material, color, structure, or visual features only inside the marked mask. Adapt scale, perspective, lighting, occlusion, and color so the replacement looks native to the original photograph. Never paste it as a rectangular patch and never alter unmasked pixels." : "No replacement reference image was supplied; perform the edit from the original image and the user's text only."}
 
@@ -472,7 +531,13 @@ ${args.prompt}
       },
       body: JSON.stringify({
         contents: [{ role: "user", parts }],
-        generationConfig: { responseModalities: ["IMAGE"] },
+        generationConfig: {
+          responseModalities: ["IMAGE"],
+          imageConfig: {
+            aspectRatio: getClosestGeminiAspectRatio(args.outputWidth, args.outputHeight),
+            imageSize: getGeminiImageSizeForDimensions(args.outputWidth, args.outputHeight),
+          },
+        },
       }),
       signal: AbortSignal.timeout(240_000),
       dispatcher: openAIProxyAgent,
@@ -510,6 +575,57 @@ ${args.prompt}
   return { base64: inlineData.data, mimeType: inlineData.mimeType || "image/png", model };
 }
 
+async function compositeEditAtOriginalResolution(args: {
+  original: { data: string };
+  mask: { data: string };
+  generated: { base64: string };
+}) {
+  const originalBuffer = Buffer.from(args.original.data, "base64");
+  const maskBuffer = Buffer.from(args.mask.data, "base64");
+  const generatedBuffer = Buffer.from(args.generated.base64, "base64");
+  const originalMetadata = await sharp(originalBuffer).metadata();
+  const generatedMetadata = await sharp(generatedBuffer).metadata();
+  const width = originalMetadata.width;
+  const height = originalMetadata.height;
+
+  if (!width || !height) throw new Error("无法读取待编辑原图的像素尺寸。");
+  if (!generatedMetadata.width || !generatedMetadata.height) throw new Error("无法读取 Gemini 编辑结果的像素尺寸。");
+
+  const fullResolutionMask = await sharp(maskBuffer)
+    .resize(width, height, { fit: "fill", kernel: sharp.kernel.linear })
+    .ensureAlpha()
+    .png()
+    .toBuffer();
+
+  const editedLayer = await sharp(generatedBuffer)
+    .resize(width, height, { fit: "fill", kernel: sharp.kernel.lanczos3 })
+    .ensureAlpha()
+    .composite([{ input: fullResolutionMask, blend: "dest-in" }])
+    .png()
+    .toBuffer();
+
+  const outputBuffer = await sharp(originalBuffer)
+    .resize(width, height, { fit: "fill" })
+    .composite([{ input: editedLayer, blend: "over" }])
+    .png({ compressionLevel: 6 })
+    .toBuffer();
+  const outputMetadata = await sharp(outputBuffer).metadata();
+
+  if (outputMetadata.width !== width || outputMetadata.height !== height) {
+    throw new Error(`局部重绘结果分辨率校验失败：期望 ${width}×${height}，实际 ${outputMetadata.width || 0}×${outputMetadata.height || 0}。`);
+  }
+
+  return {
+    outputBuffer,
+    originalWidth: width,
+    originalHeight: height,
+    modelWidth: generatedMetadata.width,
+    modelHeight: generatedMetadata.height,
+    outputWidth: outputMetadata.width,
+    outputHeight: outputMetadata.height,
+  };
+}
+
 function normalizeReferenceAssets(value: unknown): PromptImageInput[] {
   if (!Array.isArray(value)) return [];
   if (value.length > MAX_REFERENCE_IMAGES) throw new Error(`参考图最多 ${MAX_REFERENCE_IMAGES} 张。`);
@@ -518,7 +634,9 @@ function normalizeReferenceAssets(value: unknown): PromptImageInput[] {
     "product_master",
     "product_detail",
     "character_identity",
+    "character_garment_reference",
     "style_reference",
+    "replacement_reference",
   ]);
 
   return value.map((raw, index) => {
@@ -556,10 +674,20 @@ function fallbackAnalysis(asset: PromptImageInput): AssetAnalysis {
       mustPreserve: ["人物身份", "五官", "发型", "体型比例"],
       allowedInfluence: ["人物身份与外观一致性"],
     },
+    character_garment_reference: {
+      summary: "人物与服装参考图已接收；用于人物一致性和服装穿着关系参考。",
+      mustPreserve: ["人物身份", "五官", "发型", "体型比例"],
+      allowedInfluence: ["服装穿着位置", "搭配关系", "整体廓形", "覆盖范围", "自然褶皱", "姿势与服装贴合关系"],
+    },
     style_reference: {
       summary: "风格参考图已接收；当前未配置视觉模型，暂未提取具体风格特征。",
       mustPreserve: [],
       allowedInfluence: ["构图", "光影", "色彩", "影调", "氛围"],
+    },
+    replacement_reference: {
+      summary: "替换参考图已接收；仅用于精确复刻姿势、动作、图片视角与构图。",
+      mustPreserve: ["姿势", "动作", "图片视角", "景别与裁切", "参考画幅", "人物位置占比", "留白", "构图与元素空间关系"],
+      allowedInfluence: ["不得影响人物身份、面孔、身体特征、服装设计、光源、色温、明暗关系或影调"],
     },
   };
   const rules = roleRules[asset.role];
@@ -594,7 +722,9 @@ const ASSET_ANALYSIS_SYSTEM_INSTRUCTION = `
 - product_master：锁定产品版型、颜色、图案、腰头、腿口、缝线、纹理和包装结构。
 - product_detail：补充面料与工艺局部，不改变产品整体版型。
 - character_identity：锁定人物身份、五官、发型和体型，不影响产品设计。
-- style_reference：只能影响构图、光影、色彩、影调和氛围，不能改变产品或人物身份。
+- character_garment_reference：锁定人物身份、五官、发型和体型，同时提取服装穿着位置、搭配关系、整体廓形、覆盖范围、自然褶皱及姿势贴合；不得用人物图中的产品设计覆盖 product_master。
+- style_reference：可分析视觉风格、姿势、动作、裁切、机位、背景、道具、物体位置与构图；禁止提供主体、人物身份、脸、身体和服装设计。
+- replacement_reference：精确提取姿势（肢体角度、重心、手脚位置、头部朝向）、动作状态、图片视角（机位高度、俯仰和镜头方向）与构图（景别、裁切、画幅、人物位置占比、留白、元素空间关系），全部列入 mustPreserve；人物身份、面孔、身体特征、服装设计、光源、色温、明暗关系和影调不得进入 mustPreserve 或 allowedInfluence。
 仅输出 JSON：{"analyses":[{"assetId":"","summary":"","observableFeatures":[],"mustPreserve":[],"allowedInfluence":[],"warnings":[]}]}
 `;
 
@@ -725,7 +855,10 @@ app.post("/api/prompt/generate", (req, res) => {
       ? req.body.imageAnalyses as AssetAnalysis[]
       : [];
     const analysisById = new Map(providedAnalyses.map((analysis) => [analysis.assetId, analysis]));
-    const imageAnalyses = assets.map((asset) => analysisById.get(asset.id) || fallbackAnalysis(asset));
+    const imageAnalyses = assets.map((asset) => {
+      const provided = analysisById.get(asset.id);
+      return provided?.role === asset.role ? provided : fallbackAnalysis(asset);
+    });
     const compiled = compilePrompt({ ...input, imageAnalyses });
 
     return res.json({
@@ -756,9 +889,17 @@ app.post("/api/openai/generate-images", async (req, res) => {
   }
 
   try {
-    const input = normalizePromptInput(req.body || {});
-    const compiled = compilePrompt(input);
+    const normalizedInput = normalizePromptInput(req.body || {});
     const assets = normalizeReferenceAssets(req.body?.assets);
+    const analysisById = new Map((normalizedInput.imageAnalyses || []).map((analysis) => [analysis.assetId, analysis]));
+    const input: PromptCompileInput = {
+      ...normalizedInput,
+      imageAnalyses: assets.map((asset) => {
+        const provided = analysisById.get(asset.id);
+        return provided?.role === asset.role ? provided : fallbackAnalysis(asset);
+      }),
+    };
+    const compiled = compilePrompt(input);
     const imageCount = Math.max(1, Math.min(6, Number(input.imageCount) || 1));
     const size = getOpenAIImageSize(input.aspectRatio, input.resolution);
     const quality = getOpenAIImageQuality(input.resolution);
@@ -875,16 +1016,20 @@ app.post("/api/gemini/edit-image", async (req, res) => {
     const original = await loadEditableImage(imageUrl);
     const mask = parseImageDataUrl(maskDataUrl);
     const replacement = replacementImageDataUrl ? parseImageDataUrl(replacementImageDataUrl) : undefined;
+    const originalMetadata = await sharp(Buffer.from(original.data, "base64")).metadata();
+    if (!originalMetadata.width || !originalMetadata.height) throw new Error("无法读取待编辑原图的像素尺寸。");
     const generated = await requestGeminiImageEdit({
       original,
       mask,
       replacement: replacement ? { ...replacement, name: replacementImageName || "局部替换参考图" } : undefined,
       prompt,
+      outputWidth: originalMetadata.width,
+      outputHeight: originalMetadata.height,
     });
+    const composited = await compositeEditAtOriginalResolution({ original, mask, generated });
     await mkdir(GENERATED_DIR, { recursive: true });
-    const extension = generated.mimeType === "image/jpeg" ? "jpg" : generated.mimeType === "image/webp" ? "webp" : "png";
-    const fileName = `${Date.now()}-${randomUUID()}-edit.${extension}`;
-    const outputBuffer = Buffer.from(generated.base64, "base64");
+    const fileName = `${Date.now()}-${randomUUID()}-edit.png`;
+    const outputBuffer = composited.outputBuffer;
     await writeFile(path.join(GENERATED_DIR, fileName), outputBuffer);
 
     const durationMs = Date.now() - startedAt;
@@ -892,6 +1037,9 @@ app.post("/api/gemini/edit-image", async (req, res) => {
       requestId,
       durationMs,
       outputBytes: outputBuffer.byteLength,
+      originalResolution: `${composited.originalWidth}x${composited.originalHeight}`,
+      modelResolution: `${composited.modelWidth}x${composited.modelHeight}`,
+      outputResolution: `${composited.outputWidth}x${composited.outputHeight}`,
       resultUrl: `/generated/${fileName}`,
     });
 
@@ -906,6 +1054,13 @@ app.post("/api/gemini/edit-image", async (req, res) => {
       maskBytes: mask.byteLength,
       replacementBytes: replacement?.byteLength || 0,
       outputBytes: outputBuffer.byteLength,
+      originalWidth: composited.originalWidth,
+      originalHeight: composited.originalHeight,
+      modelWidth: composited.modelWidth,
+      modelHeight: composited.modelHeight,
+      outputWidth: composited.outputWidth,
+      outputHeight: composited.outputHeight,
+      resolutionPreserved: true,
     });
   } catch (error) {
     const isTimeout = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
@@ -934,7 +1089,7 @@ app.post("/api/gemini/prompt-preview", (req, res) => {
     const negativePrompt = compiled.negativePromptEnglish || compiled.negativePrompt;
     const displayBasePrompt = compiled.positivePrompt;
     const displayNegativePrompt = compiled.negativePrompt;
-    const generationPrompt = buildGeminiGenerationPrompt(basePrompt, negativePrompt, 0, imageCount, input.modelCount);
+    const generationPrompt = buildGeminiGenerationPrompt(basePrompt, negativePrompt, 0, imageCount, input.modelCount, input.visualType === "R");
 
     return res.json({
       prompt: buildGeminiPromptPreview(generationPrompt, assets),
@@ -944,6 +1099,7 @@ app.post("/api/gemini/prompt-preview", (req, res) => {
         assets,
         imageCount,
         input.modelCount,
+        input.visualType === "R",
       ),
       negativePrompt,
       model: process.env.GEMINI_IMAGE_MODEL || "gemini-3-pro-image",
@@ -1166,10 +1322,41 @@ app.post("/api/gemini/generate-images", async (req, res) => {
   }
 
   try {
-    const input = normalizePromptInput(req.body || {});
-    const compiled = compilePrompt(input);
+    const normalizedInput = normalizePromptInput(req.body || {});
     const assets = normalizeReferenceAssets(req.body?.assets);
+    const analysisById = new Map((normalizedInput.imageAnalyses || []).map((analysis) => [analysis.assetId, analysis]));
+    const input: PromptCompileInput = {
+      ...normalizedInput,
+      imageAnalyses: assets.map((asset) => {
+        const provided = analysisById.get(asset.id);
+        return provided?.role === asset.role ? provided : fallbackAnalysis(asset);
+      }),
+    };
+    const compiled = compilePrompt(input);
     const imageCount = Math.max(1, Math.min(6, Number(input.imageCount) || 1));
+    const replacementReference = assets.find((asset) => asset.role === "replacement_reference");
+    if (input.visualType === "R" && !replacementReference) {
+      return res.status(400).json({
+        requestId,
+        status: "failed",
+        code: "REPLACEMENT_REFERENCE_REQUIRED",
+        title: "缺少替换参考图",
+        error: "替换模式必须上传至少一张替换参考图。",
+        reason: "没有可用于百分百复刻姿势、动作、图片视角和构图的参考基准。",
+        suggestion: "请上传替换参考图后重新生成。",
+        stage: "preparing",
+        durationMs: Date.now() - startedAt,
+        retryable: false,
+      });
+    }
+    let effectiveAspectRatio = input.aspectRatio;
+    if (replacementReference) {
+      const parsedReference = parseImageDataUrl(replacementReference.dataUrl);
+      const metadata = await sharp(Buffer.from(parsedReference.data, "base64")).metadata();
+      if (metadata.width && metadata.height) {
+        effectiveAspectRatio = getClosestGeminiAspectRatio(metadata.width, metadata.height);
+      }
+    }
     // The current structured selection is authoritative. Never let a cached prompt
     // from a previous scene override the scene selected for this generation.
     const basePrompt = compiled.positivePromptEnglish || compiled.positivePrompt;
@@ -1184,7 +1371,7 @@ app.post("/api/gemini/generate-images", async (req, res) => {
       return await requestGeminiImage({
         prompt,
         assets,
-        aspectRatio: input.aspectRatio,
+        aspectRatio: effectiveAspectRatio,
         resolution: input.resolution,
         signal,
         attemptId,
@@ -1193,7 +1380,7 @@ app.post("/api/gemini/generate-images", async (req, res) => {
 
     for (let index = 0; index < imageCount; index += 1) {
       failureStage = "generating";
-      const prompt = buildGeminiGenerationPrompt(basePrompt, negativePrompt, index, imageCount, input.modelCount);
+      const prompt = buildGeminiGenerationPrompt(basePrompt, negativePrompt, index, imageCount, input.modelCount, input.visualType === "R");
 
       let generated;
       let activeAttemptController = new AbortController();
@@ -1213,7 +1400,7 @@ app.post("/api/gemini/generate-images", async (req, res) => {
              activeAttemptController = new AbortController();
              console.log("Starting isolated Gemini safety retry", { attemptId: retryAttemptId });
              generated = await generateOne(
-               buildGeminiGenerationPrompt(refinedPrompt, negativePrompt, index, imageCount, input.modelCount),
+               buildGeminiGenerationPrompt(refinedPrompt, negativePrompt, index, imageCount, input.modelCount, input.visualType === "R"),
                activeAttemptController.signal,
                retryAttemptId,
              );
@@ -1239,7 +1426,8 @@ app.post("/api/gemini/generate-images", async (req, res) => {
       provider: "google",
       model,
       scene: input.scene,
-      aspectRatio: input.aspectRatio,
+      replacementMode: input.replacementMode,
+      aspectRatio: effectiveAspectRatio,
       resolution: normalizeGeminiImageResolution(input.resolution),
       referenceImageCount: assets.length,
       positivePrompt: compiled.positivePrompt,

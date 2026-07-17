@@ -11,6 +11,7 @@ import {
   getSceneOptions,
   type AssetAnalysis,
   type PromptImageInput,
+  type ReplacementModeId,
 } from "./prompt-config/promptConfig";
 import { hydrateProjectImages, serializeProjectsWithoutImagePayloads, serializeTasksWithoutImagePayloads } from "./data/imageAssetStore";
 
@@ -33,7 +34,10 @@ function getPromptAssets(project: Project): PromptImageInput[] {
       .map((asset) => ({
         id: asset.id,
         name: asset.name,
-        role: "character_identity" as const,
+        role: project.visualType === "R"
+          && (project.replacementMode === "服装+场景替换" || project.replacementMode === "服装替换")
+          ? "character_garment_reference" as const
+          : "character_identity" as const,
         dataUrl: asset.url,
         weight: "high" as const,
       })),
@@ -42,7 +46,7 @@ function getPromptAssets(project: Project): PromptImageInput[] {
       .map((asset) => ({
         id: asset.id,
         name: asset.name,
-        role: "style_reference" as const,
+        role: project.visualType === "R" ? "replacement_reference" as const : "style_reference" as const,
         dataUrl: asset.url,
         weight: asset.weight,
       })),
@@ -54,10 +58,15 @@ function getPromptAssetMetadata(project: Project) {
 }
 
 function getProjectImageAnalyses(project: Project): AssetAnalysis[] {
+  const characterRole = project.visualType === "R"
+    && (project.replacementMode === "服装+场景替换" || project.replacementMode === "服装替换")
+    ? "character_garment_reference"
+    : "character_identity";
+  const referenceRole = project.visualType === "R" ? "replacement_reference" : "style_reference";
   return [
     ...project.productImages.map((asset) => asset.analysis),
-    ...project.characterImages.map((asset) => asset.analysis),
-    ...project.referenceImages.map((asset) => asset.analysis),
+    ...project.characterImages.map((asset) => asset.analysis?.role === characterRole ? asset.analysis : undefined),
+    ...project.referenceImages.map((asset) => asset.analysis?.role === referenceRole ? asset.analysis : undefined),
   ].filter((analysis): analysis is AssetAnalysis => Boolean(analysis));
 }
 
@@ -262,6 +271,7 @@ export default function App() {
             ? Math.max(0, Math.min(4, project.modelCount))
             : Math.max(1, project.characterImages.length),
           scene,
+          replacementMode: project.replacementMode || "服装+场景替换",
           imageCount: shouldMigrateDefaultCount ? 1 : project.imageCount,
           tone: hasValidScene ? project.tone : getRecommendedTone(project.visualType, scene),
           originalPrompt: (project.originalPrompt && project.originalPrompt === "清晨自然光，真实自然的人物状态，高级运动杂志摄影质感，突出产品的版型、面料纹理和舒适感，保持人物形象与产品设计一致。") ? "" : (project.originalPrompt || ""),
@@ -296,6 +306,7 @@ export default function App() {
         .filter((t: any) => t.taskId !== "task-demo-initial-shot")
         .map((task: Task) => ({
           ...task,
+          replacementMode: task.replacementMode || "服装+场景替换",
           modelCount: Number.isFinite(task.modelCount) ? task.modelCount : Math.max(1, task.characterImages.length),
           negativePrompt: task.negativePrompt || "",
           promptConfigVersion: task.promptConfigVersion || "legacy",
@@ -324,6 +335,7 @@ export default function App() {
 
   const promptPreviewPayload = React.useMemo(() => ({
     visualType: currentProject.visualType,
+    replacementMode: currentProject.replacementMode,
     scene: currentProject.scene,
     productFunctions: currentProject.productFunctions,
     shotScale: currentProject.shotScale,
@@ -422,6 +434,7 @@ export default function App() {
       modelCount: 1,
       referenceImages: [],
       visualType: "A",
+      replacementMode: "服装+场景替换",
       scene: "海边自在",
       productFunctions: [],
       shotScale: "中景",
@@ -469,6 +482,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           visualType: currentProject.visualType,
+          replacementMode: currentProject.replacementMode,
           scene: currentProject.scene,
           productFunctions: currentProject.productFunctions,
           shotScale: currentProject.shotScale,
@@ -506,12 +520,15 @@ export default function App() {
           })),
           characterImages: currentProject.characterImages.map((asset) => ({
             ...asset,
-            role: "character_identity",
+            role: currentProject.visualType === "R"
+              && (currentProject.replacementMode === "服装+场景替换" || currentProject.replacementMode === "服装替换")
+              ? "character_garment_reference"
+              : "character_identity",
             analysis: analysisById.get(asset.id) || asset.analysis,
           })),
           referenceImages: currentProject.referenceImages.map((asset) => ({
             ...asset,
-            role: "style_reference",
+            role: currentProject.visualType === "R" ? "replacement_reference" : "style_reference",
             analysis: analysisById.get(asset.id) || asset.analysis,
           })),
           optimizedPrompt,
@@ -547,6 +564,18 @@ export default function App() {
   // Trigger main brand visual generation pipeline
   const handleGenerateBrandVisual = async () => {
     const generationProject = currentProject;
+    if (generationProject.visualType === "R" && generationProject.referenceImages.length === 0) {
+      setGenerationError({
+        title: "缺少替换参考图",
+        message: "替换模式必须上传至少一张替换参考图。",
+        reason: "系统需要从参考图中提取并百分百复刻姿势、动作、图片视角和构图。",
+        suggestion: "请在“参考风格图”区域上传替换基准图后重新生成。",
+        code: "REPLACEMENT_REFERENCE_REQUIRED",
+        stage: "preparing",
+        retryable: false,
+      });
+      return;
+    }
     let responseFailure: GenerationFailure | null = null;
     setGenerationError(null);
     setIsGenerating(true);
@@ -560,6 +589,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           visualType: generationProject.visualType,
+          replacementMode: generationProject.replacementMode,
           scene: generationProject.scene,
           productFunctions: generationProject.productFunctions,
           shotScale: generationProject.shotScale,
@@ -621,13 +651,14 @@ export default function App() {
           keepCharacter: generationProject.keepCharacter,
           referenceImages: generationProject.referenceImages.map(r => ({ url: r.url, weight: r.weight })),
           visualType: generationProject.visualType,
+          replacementMode: generationProject.replacementMode,
           scene: data.scene || generationProject.scene,
           productFunctions: generationProject.productFunctions,
           shotScale: generationProject.shotScale,
           cameraAngle: generationProject.cameraAngle,
           tone: generationProject.tone,
           resolution: generationProject.resolution,
-          aspectRatio: generationProject.aspectRatio,
+          aspectRatio: data.aspectRatio || generationProject.aspectRatio,
           imageCount: generationProject.imageCount,
           originalPrompt: generationProject.originalPrompt,
           optimizedPrompt: data.positivePrompt || generationProject.optimizedPrompt || generationProject.originalPrompt,
@@ -666,6 +697,7 @@ export default function App() {
   const handleRestoreTaskParams = (task: Task) => {
     handleUpdateProject({
       visualType: task.visualType,
+      replacementMode: task.replacementMode,
       scene: task.scene,
       productFunctions: task.productFunctions,
       shotScale: task.shotScale,

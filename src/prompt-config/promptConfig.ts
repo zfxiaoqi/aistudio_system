@@ -1,4 +1,5 @@
-export type VisualTypeId = "A" | "B" | "C";
+export type VisualTypeId = "A" | "B" | "C" | "R";
+export type ReplacementModeId = "服装+场景替换" | "产品替换" | "服装替换";
 
 export interface PromptOption {
   id: string;
@@ -12,6 +13,7 @@ export interface PromptOption {
 
 export interface PromptCompileInput {
   visualType: VisualTypeId;
+  replacementMode?: ReplacementModeId;
   scene?: string;
   productFunctions: string[];
   shotScale: string;
@@ -33,7 +35,9 @@ export type ImageReferenceRole =
   | "product_master"
   | "product_detail"
   | "character_identity"
-  | "style_reference";
+  | "character_garment_reference"
+  | "style_reference"
+  | "replacement_reference";
 
 export interface AssetAnalysis {
   assetId: string;
@@ -76,7 +80,7 @@ export interface CompiledPromptPackage {
   configVersion: string;
 }
 
-export const PROMPT_CONFIG_VERSION = "badigao-v1.0.0";
+export const PROMPT_CONFIG_VERSION = "badigao-v1.3.0";
 
 export const VISUAL_TYPE_OPTIONS: PromptOption[] = [
   {
@@ -103,9 +107,17 @@ export const VISUAL_TYPE_OPTIONS: PromptOption[] = [
       "产品功能视觉。弱化场景叙事，聚焦产品本身的功能特性，以清晰的材质、结构、局部特写或可信演示直接呈现所选卖点。",
     version: 1,
   },
+  {
+    id: "R",
+    label: "替换模式",
+    description: "百分百复刻姿势、动作、视角与构图",
+    prompt:
+      "参考图精确替换视觉。替换参考图只负责四项硬约束：姿势、动作、图片视角和构图必须百分百复刻，包括肢体角度、重心、手脚位置、头部朝向、动作状态、机位高低、俯仰方向、景别、裁切、人物位置占比、留白和元素空间关系。不得参考或复制替换参考图中的人物身份、面孔、身体特征、服装设计、光源、色温、明暗关系和影调；人物由人物参考图或品牌规范决定，产品由产品主图决定，光影由所选场景和页面色调决定。",
+    version: 3,
+  },
 ];
 
-export const SCENE_OPTIONS: Record<VisualTypeId, PromptOption[]> = {
+const BASE_SCENE_OPTIONS: Record<"A" | "B" | "C", PromptOption[]> = {
   A: [
     {
       id: "海边自在",
@@ -189,6 +201,48 @@ export const SCENE_OPTIONS: Record<VisualTypeId, PromptOption[]> = {
   ],
   C: [],
 };
+
+export const SCENE_OPTIONS: Record<VisualTypeId, PromptOption[]> = {
+  ...BASE_SCENE_OPTIONS,
+  R: BASE_SCENE_OPTIONS.A,
+};
+
+const REPLACEMENT_EXACT_LOCK_NEGATIVE =
+  "姿势改变，动作改变，肢体角度偏移，重心改变，手部位置变化，脚部位置变化，头部朝向改变，腿部姿态变化，关节弯曲方向改变，躯干倾斜角度变化，动作幅度变化，图片视角改变，机位高度变化，俯仰方向变化，镜头方向变化，构图改变，景别改变，裁切改变，画幅改变，人物位置偏移，人物占比变化，留白方向变化，元素空间关系变化";
+const PRODUCT_REPLACEMENT_NEGATIVE =
+  "产品版型变形，腰头扭曲，腿口不对称，缝线错误，面料纹理丢失，竖纹肌理缺失，品牌色偏差，包装比例错误，产品被遮挡，产品漂浮，面料塑料感，腰头过紧勒肉，腰头过松空荡，裤脚卷边，裆部堆褶，产品因姿势不合理扭曲，乱码包装文字";
+const PERSON_REPLACEMENT_NEGATIVE =
+  "未成年人，幼态脸，儿童体型，网红脸，欧美化五官，夸张长腿，极端瘦身，浓妆，烟熏妆，夸张睫毛，强修容，塑料皮肤，蜡像皮肤，过度磨皮，油亮皮肤，毛孔完全消失，橙黄色皮肤，灰暗肤色，挑逗表情，刻意性感，僵硬站姿，身体比例失真，畸形手臂，多余肢体，缺失手指，多余手指，粘连手指";
+
+export const REPLACEMENT_MODE_OPTIONS: PromptOption[] = [
+  {
+    id: "服装+场景替换",
+    label: "服装+场景替换",
+    description: "精确复刻姿势动作视角构图，替换场景与服装",
+    prompt:
+      "【替换模式：服装+场景替换】替换参考图中的姿势、动作、图片视角和构图必须百分百复刻：保持肢体角度、重心、手脚位置、头部朝向、动作状态、机位、俯仰方向、景别、裁切、人物位置占比、留白和元素空间关系不变。替换参考图中的人物身份、面孔、身体特征、服装和光影调性不作为约束。人物使用人物参考图或22–30岁亚洲女性品牌规范；场景与光影完全使用用户选择的A类场景及页面色调；服装替换为用户上传的巴迪高产品，版型、腰头宽度、腿口弧线、缝线、颜色、图案、包边和纯棉竖纹面料肌理必须准确。商业生活方式摄影级真实度，发丝、面料和产品边缘清晰。",
+    negativePrompt: `${REPLACEMENT_EXACT_LOCK_NEGATIVE}，${PRODUCT_REPLACEMENT_NEGATIVE}`,
+    version: 3,
+  },
+  {
+    id: "产品替换",
+    label: "产品替换",
+    description: "精确复刻姿势动作视角构图，仅替换产品包装",
+    prompt:
+      "【替换模式：产品替换】替换参考图中的姿势、动作、图片视角和构图必须百分百复刻；若画面有人物，保持肢体角度、重心、手脚位置、头部朝向和动作状态不变；保持机位、俯仰方向、景别、裁切、画幅、元素位置、产品占位、留白和空间关系不变。替换参考图中的人物身份、面孔、身体特征和光影调性不作为约束，可按人物参考图、品牌规范和页面色调重新生成。只将产品或包装替换为用户上传的巴迪高产品及包装，包装比例、结构、品牌色、主要识别区，以及产品版型、腰头、腿口、缝线和面料纹理必须准确。商业摄影级真实度，产品边缘、包装主要识别区和面料纹理清晰。",
+    negativePrompt: `${REPLACEMENT_EXACT_LOCK_NEGATIVE}，${PRODUCT_REPLACEMENT_NEGATIVE}`,
+    version: 3,
+  },
+  {
+    id: "服装替换",
+    label: "服装替换",
+    description: "精确复刻姿势动作视角构图，替换人物与服装",
+    prompt:
+      "【替换模式：服装替换】替换参考图中的姿势、动作、图片视角和构图必须百分百复刻：保持肢体角度、重心、手脚位置、头部朝向、动作状态、身体曲线走向、机位、俯仰方向、景别、裁切、人物位置占比、留白和元素空间关系不变。替换参考图中的人物身份、面孔、身体特征和光影调性不作为约束。人物使用人物参考图或22–30岁亚洲女性品牌规范；光影与色调使用页面选择和品牌场景要求；服装替换为用户上传的巴迪高产品及克制的白色或奶油白基础上装，版型、腰头宽度、腿口弧线、缝线、颜色、包边和纯棉竖纹肌理必须准确。若参考图出现包装，可替换为巴迪高包装但保持其构图位置和占比。商业生活方式摄影级真实度，皮肤真实柔和。",
+    negativePrompt: `${REPLACEMENT_EXACT_LOCK_NEGATIVE}，${PERSON_REPLACEMENT_NEGATIVE}，${PRODUCT_REPLACEMENT_NEGATIVE}`,
+    version: 3,
+  },
+];
 
 export const SELLING_POINT_OPTIONS: PromptOption[] = [
   {
@@ -356,6 +410,19 @@ const ENGLISH_VISUAL_TYPE: Record<VisualTypeId, string> = {
   A: "Brand-emotion and lifestyle visual. Prioritize natural, clean, relaxed, lightweight, effortless premium storytelling over rigid feature demonstration.",
   B: "Authentic-use visual. Build credible product evidence through natural daily movement, showing softness, stretch, support, coverage, and stability without exaggeration.",
   C: "Product-feature visual. Reduce scene narrative and focus on material, construction, close-up details, and credible demonstrations of the selected selling points.",
+  R: "Reference-guided replacement visual. Reproduce the replacement reference pose, action, camera viewpoint, and composition exactly. Do not inherit the replacement reference person, identity, face, body traits, garment design, lighting, color temperature, or tonal mood. Person appearance comes from the character reference or brand standard; product design comes from the product master; lighting and tone come from the selected scene and UI settings.",
+};
+
+const ENGLISH_REPLACEMENT_MODES: Record<ReplacementModeId, string> = {
+  "服装+场景替换": "GARMENT + SCENE REPLACEMENT. Reproduce the replacement reference pose, action, camera viewpoint, shot scale, crop, subject placement, negative space, and composition exactly. Do not copy or constrain the person, identity, face, body traits, source garment, lighting, color temperature, or tonal mood. Use the character reference or adult Asian brand standard for the person; use the selected A-scene and UI tone for environment and lighting; replace the garment with the uploaded Badigao product at highest fidelity.",
+  "产品替换": "PRODUCT REPLACEMENT. Reproduce the replacement reference pose and action where people are present, and reproduce camera viewpoint, shot scale, crop, aspect ratio, object placement, product footprint, negative space, and composition exactly. Do not copy or constrain the reference person, identity, face, body traits, lighting, color temperature, or tonal mood. Replace only the product or packaging with the uploaded Badigao product at highest fidelity.",
+  "服装替换": "GARMENT REPLACEMENT. Reproduce the replacement reference pose, action, body-line direction, camera viewpoint, shot scale, crop, subject placement, negative space, and composition exactly. Do not copy or constrain the reference person, identity, face, body traits, lighting, color temperature, or tonal mood. Use the character reference or adult Asian brand standard for the person, UI settings for lighting and tone, and the uploaded Badigao product for garment design.",
+};
+
+const ENGLISH_REPLACEMENT_NEGATIVES: Record<ReplacementModeId, string> = {
+  "服装+场景替换": "changed pose, changed action, shifted limb angle, changed weight distribution, moved hands, moved feet, changed head direction, changed camera viewpoint, changed camera height, changed tilt, changed shot scale, changed crop, changed aspect ratio, shifted subject placement, changed negative space, changed composition, deformed product silhouette, twisted waistband, asymmetric leg openings, incorrect seams, missing ribbed texture, wrong brand color, plastic fabric, obscured product",
+  "产品替换": "changed pose, changed action, changed camera viewpoint, changed camera height, changed tilt, changed shot scale, changed crop, changed aspect ratio, moved elements, changed product footprint, changed negative space, changed composition, deformed product, wrong packaging proportions, gibberish packaging text",
+  "服装替换": "changed pose, changed action, changed body-line direction, shifted limb angle, moved hands, moved feet, changed head direction, changed camera viewpoint, changed shot scale, changed crop, changed aspect ratio, shifted subject placement, changed negative space, changed composition, childlike person, influencer face, plastic skin, sexualized pose, deformed garment, twisted waistband, incorrect leg openings, missing ribbed texture, wrong packaging",
 };
 
 const ENGLISH_SCENES: Record<string, string> = {
@@ -421,10 +488,11 @@ export const PROMPT_REFINER_SYSTEM_INSTRUCTION = `
 
 必须遵守：
 1. 不删除或弱化产品高保真、成年人身份、安全边界、场景视觉基因、景别、角度、影调、画幅、分辨率和负面约束。
-2. 不添加用户没有提供的产品材质、认证、功效或包装文字事实。
-3. 解决重复和语言冲突，让提示词清晰、可执行、摄影语言自然。
-4. positivePrompt 使用中文为主，可保留必要英文摄影增强词；negativePrompt 保持逗号分隔。
-5. 仅输出 JSON：{"title":"4至10字中文标题","positivePrompt":"最终正向提示词","negativePrompt":"最终负面提示词"}。
+2. 替换模式中必须百分百保持替换参考图的姿势、动作、图片视角与构图；不得把替换参考图的人物身份、面孔、身体特征、服装设计、光源、色温或影调加入约束。
+3. 不添加用户没有提供的产品材质、认证、功效或包装文字事实。
+4. 解决重复和语言冲突，让提示词清晰、可执行、摄影语言自然。
+5. positivePrompt 使用中文为主，可保留必要英文摄影增强词；negativePrompt 保持逗号分隔。
+6. 仅输出 JSON：{"title":"4至10字中文标题","positivePrompt":"最终正向提示词","negativePrompt":"最终负面提示词"}。
 `;
 
 function findOption(options: PromptOption[], id?: string) {
@@ -445,6 +513,7 @@ export function getRecommendedTone(visualType: VisualTypeId, scene?: string) {
 
 export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage {
   const noPeople = input.modelCount === 0;
+  const isReplacement = input.visualType === "R";
   const fragments: SelectedPromptFragment[] = [];
   const negativeFragments: string[] = [COMMON_NEGATIVE_PROMPT];
   const warnings: string[] = [];
@@ -463,6 +532,12 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
 
   const visualType = findOption(VISUAL_TYPE_OPTIONS, input.visualType);
   const scene = findOption(SCENE_OPTIONS[input.visualType], input.scene);
+  const replacementMode = isReplacement
+    ? findOption(REPLACEMENT_MODE_OPTIONS, input.replacementMode)
+    : undefined;
+  const usesReplacementScene = input.replacementMode === "服装+场景替换";
+  const usesCharacterGarmentReference = isReplacement
+    && (input.replacementMode === "服装+场景替换" || input.replacementMode === "服装替换");
   const shotScale = findOption(SHOT_SCALE_OPTIONS, input.shotScale);
   const cameraAngle = findOption(CAMERA_ANGLE_OPTIONS, input.cameraAngle);
   const tone = findOption(TONE_OPTIONS, input.tone);
@@ -470,7 +545,8 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
   const resolution = findOption(RESOLUTION_OPTIONS, input.resolution);
 
   add("visualType", visualType);
-  add("scene", scene);
+  add("replacementMode", replacementMode);
+  if (!isReplacement || usesReplacementScene) add("scene", scene);
   input.productFunctions.forEach((id) => add("sellingPoint", findOption(SELLING_POINT_OPTIONS, id)));
   add("shotScale", shotScale);
   add("cameraAngle", cameraAngle);
@@ -480,6 +556,8 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
 
   if (input.visualType !== "C" && !scene) warnings.push("当前视觉类型缺少有效场景，已仅使用通用品牌规则。");
   if (input.visualType === "C" && input.productFunctions.length === 0) warnings.push("C类视觉至少应选择一个产品功能卖点。");
+  if (isReplacement && !replacementMode) warnings.push("替换模式缺少有效的替换子模式。");
+  if (isReplacement && input.referenceImages.length === 0) warnings.push("替换模式必须上传至少一张替换参考图，才能复刻姿势、动作、图片视角和构图。");
   if (input.productImages.length === 0) warnings.push("未提供产品参考图，无法建立产品外观高保真约束。");
 
   const imageReferenceInstructions = [
@@ -489,13 +567,19 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
     noPeople
       ? "已选择0人：画面中不得出现人物、人体部位、手、脸、人物倒影或人形模特；采用产品静物、平铺、悬挂、装置或环境陈列等无人摄影方式。"
       : input.characterImages.length
-      ? `人物参考图：${input.characterImages.join("、")}。仅用于人物身份、五官、发型与体型一致性。`
+      ? usesCharacterGarmentReference
+        ? `人物与服装参考图：${input.characterImages.join("、")}。用于保持人物身份、五官、发型与体型一致性，并参考图中服装的穿着位置、搭配关系、整体廓形、覆盖范围、自然褶皱和与姿势的贴合关系。人物图服装不得覆盖产品主图规范：巴迪高产品的版型、腰头、腿口、缝线、纹理、颜色和品牌结构始终以产品主参考图为最高优先级。`
+        : `人物参考图：${input.characterImages.join("、")}。仅用于人物身份、五官、发型与体型一致性。`
       : "未提供人物参考图，使用巴迪高默认成年亚洲女性规范。",
     input.referenceImages.length
-      ? `风格参考图：${(input.referenceImageWeights?.length
+      ? isReplacement
+        ? `替换参考图：${(input.referenceImageWeights?.length
+            ? input.referenceImageWeights.map((item) => `${item.name}（权重：${WEIGHT_CN[item.weight]}）`)
+            : input.referenceImages).join("、")}。只锁定四项：姿势、动作、图片视角和构图必须百分百复刻，包括肢体角度、重心、手脚位置、头部朝向、动作状态、机位、俯仰方向、景别、裁切、参考画幅、人物位置占比、留白和元素空间关系。不得参考替换图中的人物身份、面孔、身体特征、服装设计、光源、色温、明暗关系或影调。`
+        : `风格参考图：${(input.referenceImageWeights?.length
           ? input.referenceImageWeights.map((item) => `${item.name}（权重：${WEIGHT_CN[item.weight]}）`)
           : input.referenceImages).join("、")}。权重控制风格参考的影响强度；可参考视觉风格、光影、色彩、影调、景深、留白、姿势、动作、裁切、机位、背景、家具、道具、建筑、物体位置与构图。禁止复制参考图中的主体、人物身份、脸、身体和服装设计；高权重也不得突破此边界。`
-      : "未提供额外风格参考图。",
+      : isReplacement ? "未提供替换参考图，无法执行维度锁定。" : "未提供额外风格参考图。",
   ].join("\n");
 
   const analysisInstructions = (input.imageAnalyses || [])
@@ -516,7 +600,8 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
   const sections = [
     "【品牌与任务】\n巴迪高高级商业视觉生成。真实相机成像、自然生活抓拍感与高级品牌精致度并存。",
     `【视觉类型】\n${visualType?.prompt || "按巴迪高品牌视觉规范生成。"}`,
-    scene ? `【场景视觉基因】\n${scene.prompt}` : "",
+    replacementMode ? `【替换规则】\n${replacementMode.prompt}` : "",
+    scene && (!isReplacement || usesReplacementScene) ? `【场景视觉基因】\n${scene.prompt}` : "",
     noPeople
       ? "【无人画面规范】\n画面中不得出现人物、人体局部、手、脸、人物倒影或人形模特。围绕产品本身、风格语言和场景关系设计静物、平铺、悬挂、装置或环境陈列摄影。"
       : `【人物规范】\n${PERSON_BASE_PROMPT}`,
@@ -527,9 +612,15 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
           .filter(Boolean)
           .join("\n")}`
       : "",
-    `【摄影参数】\n${shotScale?.prompt || input.shotScale} ${cameraAngle?.prompt || input.cameraAngle}`,
-    `【色彩与输出】\n${tone?.prompt || input.tone} ${aspectRatio?.prompt || input.aspectRatio} ${resolution?.prompt || input.resolution}`,
-    `【批次要求】\n本次生成${input.imageCount}张；保持品牌与产品规则一致，${noPeople ? "所有画面均保持无人，仅让产品陈列、机位和构图产生合理差异" : "同时保持人物规则一致，让构图和动作具有合理差异"}，避免复制画面。`,
+    isReplacement
+      ? "【摄影参数】\n景别、机位、俯仰方向、镜头方向、裁切、人物位置占比、留白和构图必须百分百跟随替换参考图；页面通用景别、角度和画幅选项不得覆盖替换参考图。"
+      : `【摄影参数】\n${shotScale?.prompt || input.shotScale} ${cameraAngle?.prompt || input.cameraAngle}`,
+    isReplacement
+      ? `【色彩与输出】\n替换参考图的光源、色温、明暗关系和影调不作为约束；${usesReplacementScene ? (tone?.prompt || input.tone) : `使用页面选择的${tone?.prompt || input.tone}`} 画幅比例跟随替换参考图，${resolution?.prompt || input.resolution}`
+      : `【色彩与输出】\n${tone?.prompt || input.tone} ${aspectRatio?.prompt || input.aspectRatio} ${resolution?.prompt || input.resolution}`,
+    isReplacement
+      ? `【批次要求】\n本次生成${input.imageCount}张；所有图片都必须百分百保持替换参考图的姿势、动作、图片视角和构图，只允许人物、产品、场景内容及光影调性按当前替换模式变化。`
+      : `【批次要求】\n本次生成${input.imageCount}张；保持品牌与产品规则一致，${noPeople ? "所有画面均保持无人，仅让产品陈列、机位和构图产生合理差异" : "同时保持人物规则一致，让构图和动作具有合理差异"}，避免复制画面。`,
     input.originalPrompt.trim() ? `【用户补充创意】\n${input.originalPrompt.trim()}` : "",
     `【质量底线】\n产品还原优先于创意发挥；${noPeople ? "产品、道具、家具" : "人物、产品、家具"}或自然环境之间的重力、遮挡、透视、受光和材质关系必须真实。`,
   ].filter(Boolean);
@@ -543,17 +634,22 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
     noPeople
       ? "People count is zero. Do not use any character reference and do not depict people, body parts, hands, faces, reflections of people, or human-shaped mannequins."
       : input.characterImages.length
-      ? `Character identity references: ${input.characterImages.join(", ")}. Preserve identity, facial features, hairstyle, and body proportions only.`
+      ? usesCharacterGarmentReference
+        ? `Character and garment-wearing references: ${input.characterImages.join(", ")}. Preserve identity, facial features, hairstyle, and body proportions. Also reference the source clothing's wearing position, styling relationship, overall silhouette, coverage, natural folds, and pose-to-garment fit. Never let source clothing override the product master: Badigao product silhouette, waistband, leg openings, seams, texture, color, and brand structure must follow the dedicated product reference.`
+        : `Character identity references: ${input.characterImages.join(", ")}. Preserve identity, facial features, hairstyle, and body proportions only.`
       : "No character reference was provided; use an unmistakably adult Asian woman aged 22–30 with natural features and healthy proportions.",
     input.referenceImageWeights?.length
-      ? `Style references: ${input.referenceImageWeights.map((item, index) => `Reference ${index + 1} '${item.name}' — ${WEIGHT_EN[item.weight]}`).join("; ")}. The references may influence visual style, lighting, palette, tonal contrast, depth, negative-space rhythm, pose, action, crop, camera placement, background, furniture, props, architecture, object placement, and composition. Never reproduce a reference subject, character identity, face, body, or garment design. High weight never overrides this boundary.`
+      ? isReplacement
+        ? `Replacement references: ${input.referenceImageWeights.map((item, index) => `Reference ${index + 1} '${item.name}'`).join("; ")}. Reproduce pose, action, camera viewpoint, shot scale, crop, reference aspect ratio, subject placement, negative space, and composition exactly. Do not inherit the reference person, identity, face, body traits, garment design, lighting, color temperature, brightness hierarchy, or tonal mood.`
+        : `Style references: ${input.referenceImageWeights.map((item, index) => `Reference ${index + 1} '${item.name}' — ${WEIGHT_EN[item.weight]}`).join("; ")}. The references may influence visual style, lighting, palette, tonal contrast, depth, negative-space rhythm, pose, action, crop, camera placement, background, furniture, props, architecture, object placement, and composition. Never reproduce a reference subject, character identity, face, body, or garment design. High weight never overrides this boundary.`
       : "No additional style reference was provided.",
   ].join("\n");
 
   const englishSections = [
     "[BRAND AND TASK]\nBadigao premium commercial visual. Combine realistic camera rendering, candid natural lifestyle photography, and refined brand polish.",
     `[VISUAL TYPE]\n${ENGLISH_VISUAL_TYPE[input.visualType]}`,
-    scene ? `[SCENE DNA]\n${ENGLISH_SCENES[scene.id] || scene.label}` : "",
+    replacementMode ? `[REPLACEMENT RULES]\n${ENGLISH_REPLACEMENT_MODES[replacementMode.id as ReplacementModeId]}` : "",
+    scene && (!isReplacement || usesReplacementScene) ? `[SCENE DNA]\n${ENGLISH_SCENES[scene.id] || scene.label}` : "",
     noPeople
       ? "[NO-PERSON COMPOSITION]\nCreate a strictly people-free product photograph. Do not show a person, body part, hand, face, skin, human reflection, or human-shaped mannequin. Build the composition from the product, the requested scene, styling surfaces, props, lighting, and abstract photographic direction only."
       : "[PERSON]\nUse an unmistakably adult Asian woman aged 22–30 with natural facial features, healthy balanced proportions, light makeup, real skin tone variation, subtle pores and fine hair. Keep the pose relaxed, non-influencer-like, non-sexualized, and physically believable.",
@@ -561,9 +657,15 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
     input.productFunctions.length
       ? `[SELLING-POINT EXPRESSION]\n${input.productFunctions.map((id) => ENGLISH_SELLING_POINTS[id]).filter(Boolean).join("\n")}`
       : "",
-    `[CAMERA]\n${ENGLISH_SHOTS[input.shotScale] || input.shotScale} ${ENGLISH_ANGLES[input.cameraAngle] || input.cameraAngle}`,
-    `[COLOR AND OUTPUT]\n${ENGLISH_TONES[input.tone] || input.tone} Aspect ratio ${input.aspectRatio}. Target resolution ${input.resolution}.`,
-    `[BATCH]\nGenerate ${input.imageCount} image${input.imageCount === 1 ? "" : "s"}. Keep brand and product rules consistent while allowing only reasonable variation in ${noPeople ? "product arrangement, camera position, framing, or subtle composition; every image must remain people-free" : "pose, framing, or subtle composition"}.`,
+    isReplacement
+      ? "[CAMERA]\nReproduce the replacement reference camera viewpoint, camera height, tilt, shot direction, shot scale, crop, subject placement, negative space, reference aspect ratio, and composition exactly. Generic UI camera controls must not override the reference."
+      : `[CAMERA]\n${ENGLISH_SHOTS[input.shotScale] || input.shotScale} ${ENGLISH_ANGLES[input.cameraAngle] || input.cameraAngle}`,
+    isReplacement
+      ? `[COLOR AND OUTPUT]\nDo not inherit or constrain lighting, palette, color temperature, brightness hierarchy, or tonal mood from the replacement reference. Use the selected scene and UI tone. Preserve the replacement-reference aspect ratio. Target resolution ${input.resolution}.`
+      : `[COLOR AND OUTPUT]\n${ENGLISH_TONES[input.tone] || input.tone} Aspect ratio ${input.aspectRatio}. Target resolution ${input.resolution}.`,
+    isReplacement
+      ? `[BATCH]\nGenerate ${input.imageCount} image${input.imageCount === 1 ? "" : "s"}. Every image must reproduce the same replacement-reference pose, action, camera viewpoint, crop, aspect ratio, subject placement, negative space, and composition exactly. Only person, product, scene content, and lighting tone may change as allowed by the selected replacement mode.`
+      : `[BATCH]\nGenerate ${input.imageCount} image${input.imageCount === 1 ? "" : "s"}. Keep brand and product rules consistent while allowing only reasonable variation in ${noPeople ? "product arrangement, camera position, framing, or subtle composition; every image must remain people-free" : "pose, framing, or subtle composition"}.`,
     input.originalPrompt.trim()
       ? `[ADDITIONAL CREATIVE DIRECTION — ORIGINAL USER TEXT]\n${input.originalPrompt.trim()}`
       : "",
@@ -576,12 +678,13 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
       ? [ENGLISH_SCENE_NEGATIVES[scene.id] || "Avoid the scene-specific failures defined in the Chinese display version."]
       : []),
     ...(noPeople ? ["person, people, human, model, body, body part, hand, hands, face, skin, human reflection, human-shaped mannequin"] : []),
+    ...(replacementMode ? [ENGLISH_REPLACEMENT_NEGATIVES[replacementMode.id as ReplacementModeId]] : []),
   ].join(", ");
 
   if (noPeople) negativeFragments.push("人物，人像，人体，身体局部，手，脸，皮肤，人物倒影，人形模特");
 
   return {
-    title: `${input.visualType}类·${sceneLabel}`,
+    title: isReplacement ? `替换模式·${replacementMode?.label || "未选择"}` : `${input.visualType}类·${sceneLabel}`,
     positivePrompt: sections.join("\n\n"),
     negativePrompt: negativeFragments.join("，"),
     positivePromptEnglish: englishSections.join("\n\n"),

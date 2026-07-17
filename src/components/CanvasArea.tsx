@@ -55,6 +55,11 @@ export default function CanvasArea({
   // Always render the pure visual template without overlays
   const showOverlays = false;
 
+  const getLatestImageUrl = (task: Task, originalUrl: string) => {
+    const versions = task.editVersions[originalUrl] || [];
+    return versions[versions.length - 1] || originalUrl;
+  };
+
   // Download logic (creates a standard download trigger)
   const downloadImage = async (url: string, index: number) => {
     try {
@@ -78,7 +83,7 @@ export default function CanvasArea({
     if (!task.results || task.results.length === 0) return;
     const zip = new JSZip();
     for (let i = 0; i < task.results.length; i++) {
-      const url = task.results[i];
+      const url = getLatestImageUrl(task, task.results[i]);
       const response = await fetch(url);
       const blob = await response.blob();
       zip.file(`${project.name.replace(/\s+/g, '_')}_${project.visualType}_${project.scene || 'Feature'}_2026_${i + 1}.png`, blob);
@@ -395,9 +400,7 @@ export default function CanvasArea({
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {currentTask?.results.map((imgUrl, i) => {
               const hasEdited = currentTask.editVersions[imgUrl] && currentTask.editVersions[imgUrl].length > 0;
-              const displayUrl = hasEdited 
-                ? currentTask.editVersions[imgUrl][currentTask.editVersions[imgUrl].length - 1] 
-                : imgUrl;
+              const displayUrl = getLatestImageUrl(currentTask, imgUrl);
 
               // Render custom dynamic composite
               const isWarm = currentTask.tone === "米色调" || currentTask.tone.includes("米") || currentTask.tone.includes("暖");
@@ -714,7 +717,8 @@ export default function CanvasArea({
               本次生成记录
             </p>
             <div className="pl-5 text-[11px] text-blue-950 flex flex-wrap gap-x-5 gap-y-1">
-              <span>视觉类型：{currentTask?.visualType} 类</span>
+              <span>视觉类型：{currentTask?.visualType === "R" ? "替换模式" : `${currentTask?.visualType} 类`}</span>
+              {currentTask?.visualType === "R" && <span>替换类型：{currentTask.replacementMode || "未记录"}</span>}
               <span>场景：{currentTask?.scene || "功能特写"}</span>
               <span>画幅：{currentTask?.aspectRatio}</span>
               <span>分辨率：{currentTask?.resolution}</span>
@@ -1092,11 +1096,14 @@ export default function CanvasArea({
                 局部重绘修改
               </button>
               <button
-                onClick={() => downloadImage(currentTask.results[previewIndex!], previewIndex!)}
+                onClick={() => {
+                  const originalUrl = currentTask.results[previewIndex!];
+                  downloadImage(getLatestImageUrl(currentTask, originalUrl), previewIndex!);
+                }}
                 className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold rounded-xl transition flex items-center gap-1.5"
               >
                 <Download className="w-4 h-4" />
-                下载原图 (PNG)
+                下载当前版本 (PNG)
               </button>
             </div>
           </div>

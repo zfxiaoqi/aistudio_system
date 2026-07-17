@@ -105,7 +105,9 @@ export default function TaskPanel({
                       </span>
                     </div>
                     <p className="text-[11px] font-semibold text-gray-700 truncate mt-1">
-                      {task.originalPrompt || `${task.visualType}类视觉 · ${task.scene || '功能卖点'}`}
+                      {task.originalPrompt || (task.visualType === "R"
+                        ? `替换模式 · ${task.replacementMode || "未选择"}`
+                        : `${task.visualType}类视觉 · ${task.scene || '功能卖点'}`)}
                     </p>
                   </div>
                   

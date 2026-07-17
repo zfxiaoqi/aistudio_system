@@ -34,6 +34,13 @@ export default function EditorModal({ imageUrl, originalUrl, versions, onClose, 
     maskBytes?: number;
     outputBytes?: number;
     resultUrl?: string;
+    originalWidth?: number;
+    originalHeight?: number;
+    modelWidth?: number;
+    modelHeight?: number;
+    outputWidth?: number;
+    outputHeight?: number;
+    resolutionPreserved?: boolean;
   }>({});
   const [elapsedSeconds, setElapsedSeconds] = React.useState(0);
   const [history, setHistory] = React.useState<string[]>([]); // holds canvas base64 states
@@ -42,6 +49,7 @@ export default function EditorModal({ imageUrl, originalUrl, versions, onClose, 
   const [activeImageUrl, setActiveImageUrl] = React.useState(imageUrl);
   const [replacementImage, setReplacementImage] = React.useState<ReplacementImage | null>(null);
   const [replacementError, setReplacementError] = React.useState("");
+  const [sourceDimensions, setSourceDimensions] = React.useState({ width: 0, height: 0 });
 
   React.useEffect(() => {
     setSessionVersions((current) => Array.from(new Set([originalUrl, ...versions, ...current])));
@@ -72,6 +80,10 @@ export default function EditorModal({ imageUrl, originalUrl, versions, onClose, 
       
       canvas.width = maxW;
       canvas.height = calcH;
+      setSourceDimensions({
+        width: img.naturalWidth || img.width,
+        height: img.naturalHeight || img.height,
+      });
       
       // Clear canvas (initially clean mask)
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -285,16 +297,23 @@ export default function EditorModal({ imageUrl, originalUrl, versions, onClose, 
     setProgressMsg(`正在上传原图、蒙版${replacementImage ? "、替换参考图" : ""}与修改要求...`);
 
     try {
+      const exportMaskCanvas = document.createElement("canvas");
+      exportMaskCanvas.width = sourceDimensions.width || canvas.width;
+      exportMaskCanvas.height = sourceDimensions.height || canvas.height;
+      const exportMaskContext = exportMaskCanvas.getContext("2d");
+      if (!exportMaskContext) throw new Error("无法创建原分辨率蒙版，请重新打开编辑器后重试。");
+      exportMaskContext.drawImage(canvas, 0, 0, exportMaskCanvas.width, exportMaskCanvas.height);
+
       const request = fetch("/api/gemini/edit-image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: AbortSignal.timeout(250_000),
         body: JSON.stringify({
           imageUrl: activeImageUrl,
-          maskDataUrl: canvas.toDataURL("image/png"),
+          maskDataUrl: exportMaskCanvas.toDataURL("image/png"),
           prompt: prompt.trim(),
-          maskWidth: canvas.width,
-          maskHeight: canvas.height,
+          maskWidth: exportMaskCanvas.width,
+          maskHeight: exportMaskCanvas.height,
           replacementImageDataUrl: replacementImage?.dataUrl,
           replacementImageName: replacementImage?.name,
         }),
@@ -317,6 +336,13 @@ export default function EditorModal({ imageUrl, originalUrl, versions, onClose, 
         maskBytes: data.maskBytes,
         outputBytes: data.outputBytes,
         resultUrl: data.resultUrl,
+        originalWidth: data.originalWidth,
+        originalHeight: data.originalHeight,
+        modelWidth: data.modelWidth,
+        modelHeight: data.modelHeight,
+        outputWidth: data.outputWidth,
+        outputHeight: data.outputHeight,
+        resolutionPreserved: data.resolutionPreserved,
       });
       setRequestStatus('success');
       setProgressMsg("局部重绘完成，结果图已保存。");
@@ -591,13 +617,22 @@ export default function EditorModal({ imageUrl, originalUrl, versions, onClose, 
                     requestStatus === 'success' ? '已完成' : '失败'
                   }</span>
                 </div>
-                <p>参数：原图 + {canvasRef.current?.width || 0}×{Math.round(canvasRef.current?.height || 0)} PNG蒙版{replacementImage ? " + 替换参考图" : ""} + {prompt.trim().length}字修改要求</p>
+                <p>参数：原图 + {sourceDimensions.width || canvasRef.current?.width || 0}×{sourceDimensions.height || Math.round(canvasRef.current?.height || 0)} PNG蒙版{replacementImage ? " + 替换参考图" : ""} + {prompt.trim().length}字修改要求</p>
                 <p>耗时：{responseMeta.durationMs ? `${(responseMeta.durationMs / 1000).toFixed(1)}秒` : isProcessing ? `${elapsedSeconds}秒（处理中）` : '—'}</p>
                 <p>图片返回：{
                   imageReturnStatus === 'not_started' ? '尚未请求' :
                   imageReturnStatus === 'waiting' ? '等待模型返回' :
                   imageReturnStatus === 'returned' ? `已返回${responseMeta.outputBytes ? ` · ${Math.round(responseMeta.outputBytes / 1024)}KB` : ''}` : '未返回'
                 }</p>
+                {responseMeta.outputWidth && responseMeta.outputHeight && (
+                  <p className={responseMeta.resolutionPreserved ? "font-semibold text-green-700" : "font-semibold text-red-600"}>
+                    输出分辨率：{responseMeta.outputWidth}×{responseMeta.outputHeight}
+                    {responseMeta.originalWidth && responseMeta.originalHeight
+                      ? `（初版 ${responseMeta.originalWidth}×${responseMeta.originalHeight}）`
+                      : ""}
+                    {responseMeta.resolutionPreserved ? " · 已保持" : ""}
+                  </p>
+                )}
                 {responseMeta.requestId && <p className="font-mono break-all">请求ID：{responseMeta.requestId}</p>}
                 {requestError && <p className="pt-1 border-t border-red-200 font-medium break-words">{requestError}</p>}
               </div>

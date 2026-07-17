@@ -1,4 +1,4 @@
-import type { AssetAnalysis, ImageReferenceRole } from "./prompt-config/promptConfig";
+import type { AssetAnalysis, ImageReferenceRole, ReplacementModeId, VisualTypeId } from "./prompt-config/promptConfig";
 
 export interface ReferenceImage {
   id: string;
@@ -45,7 +45,8 @@ export interface Task {
   modelCount: number;
   keepCharacter: boolean;
   referenceImages: { url: string; weight: 'low' | 'medium' | 'high' }[];
-  visualType: 'A' | 'B' | 'C';
+  visualType: VisualTypeId;
+  replacementMode?: ReplacementModeId;
   scene?: string;
   productFunctions: string[];
   shotScale: string; // '全景' | '中景' | '近景' | '特写' | '大特写'
@@ -93,7 +94,8 @@ export interface Project {
   characterImages: ImageAsset[];
   modelCount: number;
   referenceImages: ReferenceImage[];
-  visualType: 'A' | 'B' | 'C';
+  visualType: VisualTypeId;
+  replacementMode?: ReplacementModeId;
   scene?: string;
   productFunctions: string[];
   shotScale: string;
