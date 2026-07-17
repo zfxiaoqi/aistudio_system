@@ -55,6 +55,7 @@ function normalizePromptInput(body: Record<string, unknown>): PromptCompileInput
   return {
     visualType,
     replacementMode,
+    replacementWorkflow: body.replacementWorkflow === "pose_rebuild" || body.replacementWorkflow === "product_only" || body.replacementWorkflow === "multi_replace" ? body.replacementWorkflow : "multi_replace",
     scene: typeof body.scene === "string" ? body.scene : undefined,
     productFunctions: Array.isArray(body.productFunctions) ? body.productFunctions.map(String) : [],
     shotScale: typeof body.shotScale === "string" ? body.shotScale : "中景",
@@ -208,7 +209,7 @@ function getGeminiReferenceInstruction(asset: GeminiReferenceMetadata, index: nu
   } as const;
 
   const roleRules: Record<ImageReferenceRole, string> = {
-    replacement_reference: "ROLE = EXACT POSE/ACTION/VIEW/COMPOSITION REFERENCE. Reproduce pose, action, camera viewpoint, shot scale, crop, reference aspect ratio, subject placement, negative space, and composition exactly. Ignore and replace this image's person identity, face, body traits, garment design, lighting, color temperature, brightness hierarchy, and tonal mood.",
+    replacement_reference: "ROLE = EXACT COMPOSITION / CAMERA / SHOT-SCALE REFERENCE and the sole source of camera truth. Extract and reproduce exactly: composition grid, visual center of gravity, subject bounding box, subject width and height as percentages of frame, subject center coordinates, four-side margins, foreground/midground/background layering, horizon, vanishing point, camera height, elevation angle, camera direction, shot scale, crop, reference aspect ratio, negative-space direction, element spatial relationships, pose, and action. Ignore and replace this image's person identity, face, body traits, garment design, lighting, color temperature, brightness hierarchy, and tonal mood.",
     style_reference: `ROLE = STYLE REFERENCE ONLY. ${weightRules[weight]} Forbidden from this image: subject, character identity, face, body, and garment design.`,
     character_garment_reference: "ROLE = CHARACTER + GARMENT-WEARING REFERENCE. Preserve adult identity, facial features, hairstyle, and body proportions. Also reference clothing placement, styling relationship, overall silhouette, coverage, natural folds, and pose-to-garment fit. Never copy source product design over the PRODUCT MASTER; product silhouette, waistband, leg openings, seams, texture, color, and brand structure come from the dedicated product reference.",
     character_identity: "ROLE = CHARACTER IDENTITY ONLY. Preserve adult identity, facial features, hairstyle, and body proportions. Ignore and replace the source clothing, pose, crop, background, lighting, and props.",
@@ -685,8 +686,8 @@ function fallbackAnalysis(asset: PromptImageInput): AssetAnalysis {
       allowedInfluence: ["构图", "光影", "色彩", "影调", "氛围"],
     },
     replacement_reference: {
-      summary: "替换参考图已接收；仅用于精确复刻姿势、动作、图片视角与构图。",
-      mustPreserve: ["姿势", "动作", "图片视角", "景别与裁切", "参考画幅", "人物位置占比", "留白", "构图与元素空间关系"],
+      summary: "构图参考图已接收；它是替换模式中构图、镜头角度和画幅景别的唯一依据。",
+      mustPreserve: ["构图网格与视觉重心", "主体边界框及宽高占比", "主体中心点与四边边距", "前中后景层次", "地平线与消失点", "相机高度、俯仰角与镜头方向", "景别与裁切", "参考画幅", "留白方向", "元素空间关系", "姿势与动作"],
       allowedInfluence: ["不得影响人物身份、面孔、身体特征、服装设计、光源、色温、明暗关系或影调"],
     },
   };
@@ -724,7 +725,7 @@ const ASSET_ANALYSIS_SYSTEM_INSTRUCTION = `
 - character_identity：锁定人物身份、五官、发型和体型，不影响产品设计。
 - character_garment_reference：锁定人物身份、五官、发型和体型，同时提取服装穿着位置、搭配关系、整体廓形、覆盖范围、自然褶皱及姿势贴合；不得用人物图中的产品设计覆盖 product_master。
 - style_reference：可分析视觉风格、姿势、动作、裁切、机位、背景、道具、物体位置与构图；禁止提供主体、人物身份、脸、身体和服装设计。
-- replacement_reference：精确提取姿势（肢体角度、重心、手脚位置、头部朝向）、动作状态、图片视角（机位高度、俯仰和镜头方向）与构图（景别、裁切、画幅、人物位置占比、留白、元素空间关系），全部列入 mustPreserve；人物身份、面孔、身体特征、服装设计、光源、色温、明暗关系和影调不得进入 mustPreserve 或 allowedInfluence。
+- replacement_reference：该图是替换模式中构图、镜头角度和画幅景别的唯一依据。必须精确提取构图网格与视觉重心；主体边界框及其占画面宽度/高度的百分比；主体中心点坐标；头顶、脚底、左右边距；前景/中景/背景层次；地平线与消失点；相机高度、俯仰角和镜头方向；景别、裁切、画幅、留白方向和元素空间关系；同时提取姿势（肢体角度、重心、手脚位置、头部朝向）与动作状态。以上全部列入 mustPreserve，尽量使用明确位置关系和百分比描述；人物身份、面孔、身体特征、服装设计、光源、色温、明暗关系和影调不得进入 mustPreserve 或 allowedInfluence。
 仅输出 JSON：{"analyses":[{"assetId":"","summary":"","observableFeatures":[],"mustPreserve":[],"allowedInfluence":[],"warnings":[]}]}
 `;
 

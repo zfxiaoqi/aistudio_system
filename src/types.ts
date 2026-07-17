@@ -12,6 +12,7 @@ export interface ReferenceImage {
   originalBytes?: number;
   storageKey?: string;
   analysis?: AssetAnalysis;
+  replacementCategory?: 'scene' | 'upper_garment' | 'lower_garment' | 'composition' | 'action';
 }
 
 export interface ImageAsset {
@@ -27,6 +28,23 @@ export interface ImageAsset {
   originalBytes?: number;
   storageKey?: string;
   analysis?: AssetAnalysis;
+}
+
+export interface ModeWorkspace {
+  productImages: ImageAsset[];
+  characterImages: ImageAsset[];
+  modelCount: number;
+  modelSource?: 'none' | 'default' | 'custom';
+  referenceImages: ReferenceImage[];
+  visualType: VisualTypeId;
+  replacementMode?: ReplacementModeId;
+  replacementWorkflow?: 'pose_rebuild' | 'product_only' | 'multi_replace';
+  scene?: string;
+  productFunctions: string[];
+  shotScale: string;
+  cameraAngle: string;
+  originalPrompt: string;
+  keepCharacter: boolean;
 }
 
 export interface PromptFragmentSnapshot {
@@ -93,9 +111,14 @@ export interface Project {
   productImages: ImageAsset[];
   characterImages: ImageAsset[];
   modelCount: number;
+  modelSource?: 'none' | 'default' | 'custom';
+  workspaceMode?: 'creative' | 'replacement';
+  creativeWorkspace?: ModeWorkspace;
+  replacementWorkspace?: ModeWorkspace;
   referenceImages: ReferenceImage[];
   visualType: VisualTypeId;
   replacementMode?: ReplacementModeId;
+  replacementWorkflow?: 'pose_rebuild' | 'product_only' | 'multi_replace';
   scene?: string;
   productFunctions: string[];
   shotScale: string;

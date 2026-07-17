@@ -14,6 +14,7 @@ export interface PromptOption {
 export interface PromptCompileInput {
   visualType: VisualTypeId;
   replacementMode?: ReplacementModeId;
+  replacementWorkflow?: 'pose_rebuild' | 'product_only' | 'multi_replace';
   scene?: string;
   productFunctions: string[];
   shotScale: string;
@@ -512,7 +513,8 @@ export function getRecommendedTone(visualType: VisualTypeId, scene?: string) {
 }
 
 export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage {
-  const noPeople = input.modelCount === 0;
+  const replacementWorkflow = input.replacementWorkflow || "multi_replace";
+  const noPeople = input.modelCount === 0 && replacementWorkflow !== "product_only";
   const isReplacement = input.visualType === "R";
   const fragments: SelectedPromptFragment[] = [];
   const negativeFragments: string[] = [COMMON_NEGATIVE_PROMPT];
@@ -557,6 +559,16 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
   if (input.visualType !== "C" && !scene) warnings.push("当前视觉类型缺少有效场景，已仅使用通用品牌规则。");
   if (input.visualType === "C" && input.productFunctions.length === 0) warnings.push("C类视觉至少应选择一个产品功能卖点。");
   if (isReplacement && !replacementMode) warnings.push("替换模式缺少有效的替换子模式。");
+  const hasSceneReference = input.referenceImages.some((name) => name.includes("[scene]"));
+  const hasActionReference = input.referenceImages.some((name) => name.includes("[action]"));
+  const hasCompositionReference = input.referenceImages.some((name) => name.includes("[composition]"));
+  if (isReplacement && replacementWorkflow === "pose_rebuild") {
+    if (!input.characterImages.length) warnings.push("姿势锁定重构必须上传模特形象图。");
+    if (!hasActionReference) warnings.push("姿势锁定重构必须上传姿势参考图。");
+    if (!hasSceneReference && !scene) warnings.push("姿势锁定重构必须选择预设场景或上传场景参考图。");
+  }
+  if (isReplacement && replacementWorkflow === "product_only" && !hasSceneReference) warnings.push("原图单品替换必须上传需要保持不变的原场景图。");
+  if (isReplacement && replacementWorkflow === "multi_replace" && !hasCompositionReference) warnings.push("多要素精确替换建议上传构图参考图，以锁定机位、占比、景别和裁切。");
   if (isReplacement && input.referenceImages.length === 0) warnings.push("替换模式必须上传至少一张替换参考图，才能复刻姿势、动作、图片视角和构图。");
   if (input.productImages.length === 0) warnings.push("未提供产品参考图，无法建立产品外观高保真约束。");
 
@@ -570,17 +582,23 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
       ? usesCharacterGarmentReference
         ? `人物与服装参考图：${input.characterImages.join("、")}。用于保持人物身份、五官、发型与体型一致性，并参考图中服装的穿着位置、搭配关系、整体廓形、覆盖范围、自然褶皱和与姿势的贴合关系。人物图服装不得覆盖产品主图规范：巴迪高产品的版型、腰头、腿口、缝线、纹理、颜色和品牌结构始终以产品主参考图为最高优先级。`
         : `人物参考图：${input.characterImages.join("、")}。仅用于人物身份、五官、发型与体型一致性。`
-      : "未提供人物参考图，使用巴迪高默认成年亚洲女性规范。",
+      : replacementWorkflow === "product_only" ? "不使用额外人物参考图；原场景图中的人物身份、面孔、发型、身体、姿势和动作必须保持不变。" : "未提供人物参考图，使用巴迪高默认成年亚洲女性规范。",
     input.referenceImages.length
       ? isReplacement
         ? `替换参考图：${(input.referenceImageWeights?.length
             ? input.referenceImageWeights.map((item) => `${item.name}（权重：${WEIGHT_CN[item.weight]}）`)
-            : input.referenceImages).join("、")}。只锁定四项：姿势、动作、图片视角和构图必须百分百复刻，包括肢体角度、重心、手脚位置、头部朝向、动作状态、机位、俯仰方向、景别、裁切、参考画幅、人物位置占比、留白和元素空间关系。不得参考替换图中的人物身份、面孔、身体特征、服装设计、光源、色温、明暗关系或影调。`
+            : input.referenceImages).join("、")}。构图参考图是替换模式唯一的镜头与景别依据。必须先提取并百分百复刻：构图网格与视觉重心、主体边界框及其画面宽高占比、主体中心点位置、头顶/脚底/左右边距、前中后景层次、地平线与消失点、相机高度、俯仰角、镜头方向、景别、裁切、参考画幅、留白方向与元素空间关系；人物姿势还需锁定肢体角度、重心、手脚位置、头部朝向和动作状态。不得参考替换图中的人物身份、面孔、身体特征、服装设计、光源、色温、明暗关系或影调。页面景别和镜头角度选项不得覆盖构图参考图。`
         : `风格参考图：${(input.referenceImageWeights?.length
           ? input.referenceImageWeights.map((item) => `${item.name}（权重：${WEIGHT_CN[item.weight]}）`)
           : input.referenceImages).join("、")}。权重控制风格参考的影响强度；可参考视觉风格、光影、色彩、影调、景深、留白、姿势、动作、裁切、机位、背景、家具、道具、建筑、物体位置与构图。禁止复制参考图中的主体、人物身份、脸、身体和服装设计；高权重也不得突破此边界。`
       : isReplacement ? "未提供替换参考图，无法执行维度锁定。" : "未提供额外风格参考图。",
   ].join("\n");
+
+  const replacementWorkflowChinese = !isReplacement ? "" : replacementWorkflow === "pose_rebuild"
+    ? "【工作流：姿势锁定重构】姿势参考图只锁定人物动作、肢体角度、重心、手脚位置和头部朝向，不得提供人物身份、服装、场景或光影。模特形象仅服从人物形象图，产品仅服从产品主图，环境仅服从场景参考图或预设场景。允许为适配新场景调整裁切和留白，但不得改变核心姿势。"
+    : replacementWorkflow === "product_only"
+    ? "【工作流：原图单品替换】原场景图是不可改变的基础画面。保持原人物身份、面孔、发型、身体、姿势、动作、相机位置、景别、裁切、场景、道具、光线、色温、阴影和空间关系不变；只替换目标产品。新产品严格服从产品主图，并匹配原图中的透视、尺寸、遮挡、接触阴影、材质反射和环境光。不得重新设计或重构整张图片。"
+    : "【工作流：多要素精确替换】每张参考图只能影响其标记职责：人物形象决定身份；姿势图决定动作；上/下身服装图决定穿着类别和关系；构图图决定机位、景别、裁切、主体占比和留白；场景图决定环境内容；产品图决定产品设计。任何参考图不得越权覆盖其他参考图。";
 
   const analysisInstructions = (input.imageAnalyses || [])
     .map((analysis) => {
@@ -600,9 +618,12 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
   const sections = [
     "【品牌与任务】\n巴迪高高级商业视觉生成。真实相机成像、自然生活抓拍感与高级品牌精致度并存。",
     `【视觉类型】\n${visualType?.prompt || "按巴迪高品牌视觉规范生成。"}`,
-    replacementMode ? `【替换规则】\n${replacementMode.prompt}` : "",
+    replacementWorkflowChinese,
+    replacementMode && replacementWorkflow !== "product_only" ? `【替换规则】\n${replacementMode.prompt}` : "",
     scene && (!isReplacement || usesReplacementScene) ? `【场景视觉基因】\n${scene.prompt}` : "",
-    noPeople
+    replacementWorkflow === "product_only"
+      ? "【原人物保持】\n不得新增、删除或重新设计人物。原场景图中的人物身份、面孔、发型、身体、姿势、动作、衣物遮挡和人物与产品的接触关系必须保持不变。"
+      : noPeople
       ? "【无人画面规范】\n画面中不得出现人物、人体局部、手、脸、人物倒影或人形模特。围绕产品本身、风格语言和场景关系设计静物、平铺、悬挂、装置或环境陈列摄影。"
       : `【人物规范】\n${PERSON_BASE_PROMPT}`,
     `【产品与参考图】\n${PRODUCT_FIDELITY_PROMPT}\n${imageReferenceInstructions}${analysisInstructions ? `\n\n【图片视觉分析】\n${analysisInstructions}` : ""}`,
@@ -612,13 +633,19 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
           .filter(Boolean)
           .join("\n")}`
       : "",
-    isReplacement
+    replacementWorkflow === "product_only"
+      ? "【摄影参数】\n相机位置、焦段感、景别、裁切、画幅比例、透视、主体占比和留白全部保持原场景图不变。"
+      : isReplacement
       ? "【摄影参数】\n景别、机位、俯仰方向、镜头方向、裁切、人物位置占比、留白和构图必须百分百跟随替换参考图；页面通用景别、角度和画幅选项不得覆盖替换参考图。"
       : `【摄影参数】\n${shotScale?.prompt || input.shotScale} ${cameraAngle?.prompt || input.cameraAngle}`,
-    isReplacement
+    replacementWorkflow === "product_only"
+      ? `【色彩与输出】\n原场景图的光源、色温、明暗关系、阴影、反射和影调全部保持不变；仅让新产品自然匹配原有环境光。${resolution?.prompt || input.resolution}`
+      : isReplacement
       ? `【色彩与输出】\n替换参考图的光源、色温、明暗关系和影调不作为约束；${usesReplacementScene ? (tone?.prompt || input.tone) : `使用页面选择的${tone?.prompt || input.tone}`} 画幅比例跟随替换参考图，${resolution?.prompt || input.resolution}`
       : `【色彩与输出】\n${tone?.prompt || input.tone} ${aspectRatio?.prompt || input.aspectRatio} ${resolution?.prompt || input.resolution}`,
-    isReplacement
+    replacementWorkflow === "product_only"
+      ? `【批次要求】\n本次生成${input.imageCount}张；每张图都只允许替换目标产品，原人物、服装、场景、道具、构图、机位、光影和空间关系不得变化。`
+      : isReplacement
       ? `【批次要求】\n本次生成${input.imageCount}张；所有图片都必须百分百保持替换参考图的姿势、动作、图片视角和构图，只允许人物、产品、场景内容及光影调性按当前替换模式变化。`
       : `【批次要求】\n本次生成${input.imageCount}张；保持品牌与产品规则一致，${noPeople ? "所有画面均保持无人，仅让产品陈列、机位和构图产生合理差异" : "同时保持人物规则一致，让构图和动作具有合理差异"}，避免复制画面。`,
     input.originalPrompt.trim() ? `【用户补充创意】\n${input.originalPrompt.trim()}` : "",
@@ -631,7 +658,9 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
     input.productImages.length
       ? `Product master references: ${input.productImages.join(", ")}. Use them to lock silhouette, waistband, leg openings, seams, texture, color, pattern, binding, proportions, and packaging structure.`
       : "No product master reference was provided.",
-    noPeople
+    replacementWorkflow === "product_only"
+      ? "[PRESERVE ORIGINAL PEOPLE]\nDo not add, remove, or redesign any person. Preserve every original person's identity, face, hair, body, pose, action, garment occlusion, and contact relationship with the product."
+      : noPeople
       ? "People count is zero. Do not use any character reference and do not depict people, body parts, hands, faces, reflections of people, or human-shaped mannequins."
       : input.characterImages.length
       ? usesCharacterGarmentReference
@@ -640,30 +669,45 @@ export function compilePrompt(input: PromptCompileInput): CompiledPromptPackage 
       : "No character reference was provided; use an unmistakably adult Asian woman aged 22–30 with natural features and healthy proportions.",
     input.referenceImageWeights?.length
       ? isReplacement
-        ? `Replacement references: ${input.referenceImageWeights.map((item, index) => `Reference ${index + 1} '${item.name}'`).join("; ")}. Reproduce pose, action, camera viewpoint, shot scale, crop, reference aspect ratio, subject placement, negative space, and composition exactly. Do not inherit the reference person, identity, face, body traits, garment design, lighting, color temperature, brightness hierarchy, or tonal mood.`
+        ? `Replacement references: ${input.referenceImageWeights.map((item, index) => `Reference ${index + 1} '${item.name}'`).join("; ")}. Treat the composition reference as the sole source of camera and shot-scale truth. First extract and then reproduce exactly: composition grid and visual center of gravity; subject bounding box and its width/height percentages of frame; subject center coordinates; top, bottom, left, and right margins; foreground/midground/background layering; horizon and vanishing point; camera height; elevation angle; camera direction; shot scale; crop; reference aspect ratio; negative-space direction; and every element's spatial relationship. Reproduce pose and action exactly as well. Generic UI camera and shot-scale settings must not override the composition reference. Do not inherit the reference person, identity, face, body traits, garment design, lighting, color temperature, brightness hierarchy, or tonal mood.`
         : `Style references: ${input.referenceImageWeights.map((item, index) => `Reference ${index + 1} '${item.name}' — ${WEIGHT_EN[item.weight]}`).join("; ")}. The references may influence visual style, lighting, palette, tonal contrast, depth, negative-space rhythm, pose, action, crop, camera placement, background, furniture, props, architecture, object placement, and composition. Never reproduce a reference subject, character identity, face, body, or garment design. High weight never overrides this boundary.`
       : "No additional style reference was provided.",
   ].join("\n");
 
+  const replacementWorkflowEnglish = !isReplacement ? "" : replacementWorkflow === "pose_rebuild"
+    ? "[WORKFLOW: POSE-LOCKED REBUILD]\nThe pose reference controls only pose, limb angles, center of gravity, hand and foot positions, head direction, and action. It must not provide identity, garment design, scene, or lighting. Identity comes only from character references; product design only from product masters; environment only from the scene reference or selected preset. Framing may adapt to the new scene, but the core pose must not change."
+    : replacementWorkflow === "product_only"
+    ? "[WORKFLOW: ORIGINAL-SCENE PRODUCT-ONLY REPLACEMENT]\nTreat the original scene reference as an immutable base image. Preserve its people, identity, face, hair, body, pose, action, camera, shot scale, crop, environment, props, lighting, color temperature, shadows, and spatial relationships. Replace only the target product. Match perspective, scale, occlusion, contact shadow, reflections, and ambient light. Do not redesign or regenerate unrelated regions."
+    : "[WORKFLOW: MULTI-REFERENCE PRECISE REPLACEMENT]\nEach reference may control only its tagged responsibility: character for identity; action for pose; upper/lower garment for wearing category and relationship; composition for camera, shot scale, crop, subject ratio, and negative space; scene for environment; product master for product design. No reference may override another reference's responsibility.";
+
   const englishSections = [
     "[BRAND AND TASK]\nBadigao premium commercial visual. Combine realistic camera rendering, candid natural lifestyle photography, and refined brand polish.",
     `[VISUAL TYPE]\n${ENGLISH_VISUAL_TYPE[input.visualType]}`,
-    replacementMode ? `[REPLACEMENT RULES]\n${ENGLISH_REPLACEMENT_MODES[replacementMode.id as ReplacementModeId]}` : "",
+    replacementWorkflowEnglish,
+    replacementMode && replacementWorkflow !== "product_only" ? `[REPLACEMENT RULES]\n${ENGLISH_REPLACEMENT_MODES[replacementMode.id as ReplacementModeId]}` : "",
     scene && (!isReplacement || usesReplacementScene) ? `[SCENE DNA]\n${ENGLISH_SCENES[scene.id] || scene.label}` : "",
-    noPeople
+    replacementWorkflow === "product_only"
+      ? "[PRESERVE ORIGINAL PEOPLE]\nDo not add, remove, or redesign any person. Preserve all original identity, face, hair, body, pose, action, clothing, occlusion, and product contact relationships."
+      : noPeople
       ? "[NO-PERSON COMPOSITION]\nCreate a strictly people-free product photograph. Do not show a person, body part, hand, face, skin, human reflection, or human-shaped mannequin. Build the composition from the product, the requested scene, styling surfaces, props, lighting, and abstract photographic direction only."
       : "[PERSON]\nUse an unmistakably adult Asian woman aged 22–30 with natural facial features, healthy balanced proportions, light makeup, real skin tone variation, subtle pores and fine hair. Keep the pose relaxed, non-influencer-like, non-sexualized, and physically believable.",
     `[PRODUCT AND REFERENCES]\nThe uploaded product master reference has the highest priority. Product fidelity overrides creative variation. Preserve silhouette, waistband width, leg-opening curve, seams, texture, color, pattern, binding, and proportions. Keep the product clear and unobstructed.\n${englishReferenceInstructions}`,
     input.productFunctions.length
       ? `[SELLING-POINT EXPRESSION]\n${input.productFunctions.map((id) => ENGLISH_SELLING_POINTS[id]).filter(Boolean).join("\n")}`
       : "",
-    isReplacement
+    replacementWorkflow === "product_only"
+      ? "[CAMERA]\nPreserve the original scene reference camera position, focal-length feel, shot scale, crop, aspect ratio, perspective, subject ratio, and negative space exactly."
+      : isReplacement
       ? "[CAMERA]\nReproduce the replacement reference camera viewpoint, camera height, tilt, shot direction, shot scale, crop, subject placement, negative space, reference aspect ratio, and composition exactly. Generic UI camera controls must not override the reference."
       : `[CAMERA]\n${ENGLISH_SHOTS[input.shotScale] || input.shotScale} ${ENGLISH_ANGLES[input.cameraAngle] || input.cameraAngle}`,
-    isReplacement
+    replacementWorkflow === "product_only"
+      ? `[COLOR AND OUTPUT]\nPreserve the original scene reference lighting, color temperature, brightness hierarchy, shadows, reflections, and tonal mood. Adapt only the new product to the existing ambient light. Target resolution ${input.resolution}.`
+      : isReplacement
       ? `[COLOR AND OUTPUT]\nDo not inherit or constrain lighting, palette, color temperature, brightness hierarchy, or tonal mood from the replacement reference. Use the selected scene and UI tone. Preserve the replacement-reference aspect ratio. Target resolution ${input.resolution}.`
       : `[COLOR AND OUTPUT]\n${ENGLISH_TONES[input.tone] || input.tone} Aspect ratio ${input.aspectRatio}. Target resolution ${input.resolution}.`,
-    isReplacement
+    replacementWorkflow === "product_only"
+      ? `[BATCH]\nGenerate ${input.imageCount} image${input.imageCount === 1 ? "" : "s"}. Replace only the target product. Do not change any original person, clothing, environment, prop, composition, camera, lighting, or spatial relationship.`
+      : isReplacement
       ? `[BATCH]\nGenerate ${input.imageCount} image${input.imageCount === 1 ? "" : "s"}. Every image must reproduce the same replacement-reference pose, action, camera viewpoint, crop, aspect ratio, subject placement, negative space, and composition exactly. Only person, product, scene content, and lighting tone may change as allowed by the selected replacement mode.`
       : `[BATCH]\nGenerate ${input.imageCount} image${input.imageCount === 1 ? "" : "s"}. Keep brand and product rules consistent while allowing only reasonable variation in ${noPeople ? "product arrangement, camera position, framing, or subtle composition; every image must remain people-free" : "pose, framing, or subtle composition"}.`,
     input.originalPrompt.trim()

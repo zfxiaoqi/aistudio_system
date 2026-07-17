@@ -64,12 +64,22 @@ async function hydrateAsset<T extends ImageAsset | ReferenceImage>(asset: T): Pr
 }
 
 export async function hydrateProjectImages(projects: Project[]) {
-  return Promise.all(projects.map(async (project) => ({
-    ...project,
-    productImages: await Promise.all(project.productImages.map(hydrateAsset)),
-    characterImages: await Promise.all(project.characterImages.map(hydrateAsset)),
-    referenceImages: await Promise.all(project.referenceImages.map(hydrateAsset)),
-  })));
+  return Promise.all(projects.map(async (project) => {
+    const hydrateWorkspace = async (workspace: Project["creativeWorkspace"]) => workspace ? ({
+      ...workspace,
+      productImages: await Promise.all(workspace.productImages.map(hydrateAsset)),
+      characterImages: await Promise.all(workspace.characterImages.map(hydrateAsset)),
+      referenceImages: await Promise.all(workspace.referenceImages.map(hydrateAsset)),
+    }) : undefined;
+    return {
+      ...project,
+      productImages: await Promise.all(project.productImages.map(hydrateAsset)),
+      characterImages: await Promise.all(project.characterImages.map(hydrateAsset)),
+      referenceImages: await Promise.all(project.referenceImages.map(hydrateAsset)),
+      creativeWorkspace: await hydrateWorkspace(project.creativeWorkspace),
+      replacementWorkspace: await hydrateWorkspace(project.replacementWorkspace),
+    };
+  }));
 }
 
 export function serializeProjectsWithoutImagePayloads(projects: Project[]) {
@@ -77,12 +87,22 @@ export function serializeProjectsWithoutImagePayloads(projects: Project[]) {
     ...asset,
     url: asset.url.startsWith("data:image/") ? "" : asset.url,
   });
-  return projects.map((project) => ({
-    ...project,
-    productImages: project.productImages.map(strip),
-    characterImages: project.characterImages.map(strip),
-    referenceImages: project.referenceImages.map(strip),
-  }));
+  return projects.map((project) => {
+    const stripWorkspace = (workspace: Project["creativeWorkspace"]) => workspace ? ({
+      ...workspace,
+      productImages: workspace.productImages.map(strip),
+      characterImages: workspace.characterImages.map(strip),
+      referenceImages: workspace.referenceImages.map(strip),
+    }) : undefined;
+    return {
+      ...project,
+      productImages: project.productImages.map(strip),
+      characterImages: project.characterImages.map(strip),
+      referenceImages: project.referenceImages.map(strip),
+      creativeWorkspace: stripWorkspace(project.creativeWorkspace),
+      replacementWorkspace: stripWorkspace(project.replacementWorkspace),
+    };
+  });
 }
 
 export function serializeTasksWithoutImagePayloads(tasks: Task[]) {
