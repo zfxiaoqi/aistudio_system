@@ -56,6 +56,7 @@ export default function SidebarParams({
 
   const modelCount = project.modelCount;
   const [copiedPrompt, setCopiedPrompt] = React.useState<"positive" | "negative" | "actual" | null>(null);
+  const [mainMode, setMainMode] = React.useState<"creative" | "replacement">(project.visualType === "R" ? "replacement" : "creative");
   const activeUploadIndexRef = useRef<number>(0);
 
   const copyPrompt = async (text: string, type: "positive" | "negative" | "actual") => {
@@ -481,110 +482,174 @@ export default function SidebarParams({
 
           {!collapsed.visualType && (
             <div className="space-y-4 animate-fade-in text-xs">
-              
-              {/* Type A, B, C and replacement cards */}
-              <div className="grid grid-cols-2 gap-2">
-                {VISUAL_TYPE_OPTIONS.map((type) => (
-                  <button
-                    key={type.id}
-                    onClick={() => handleVisualTypeChange(type.id as VisualTypeId)}
-                    className={`p-3 rounded-xl border text-left flex flex-col justify-between transition ${
-                      project.visualType === type.id
-                        ? "border-blue-600 bg-blue-50/50 text-blue-900 shadow-sm"
-                        : "border-gray-100 bg-gray-50 hover:bg-gray-100 text-gray-600"
-                    }`}
-                  >
-                    <span className="font-bold text-xs">{type.label}</span>
-                    <span className="text-[9px] text-gray-400 mt-1 leading-normal">{type.description}</span>
-                  </button>
-                ))}
+
+              {/* Top-level mode tabs: 创意模式 / 替换模式 */}
+              <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMainMode("creative");
+                    if (project.visualType === "R") {
+                      handleVisualTypeChange("A");
+                    }
+                  }}
+                  className={`flex-1 py-2 rounded-lg text-[11px] font-bold transition ${
+                    mainMode === "creative"
+                      ? "bg-white text-blue-700 shadow-sm"
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  创意模式
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMainMode("replacement");
+                    if (project.visualType !== "R") {
+                      handleVisualTypeChange("R");
+                    }
+                  }}
+                  className={`flex-1 py-2 rounded-lg text-[11px] font-bold transition ${
+                    mainMode === "replacement"
+                      ? "bg-white text-blue-700 shadow-sm"
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  替换模式
+                </button>
               </div>
 
-              {/* Sub option block (A Scenarios / B Scenarios / C features list) */}
-              {project.visualType !== 'C' ? (
-                <div className="space-y-2">
-                  <label className="font-semibold text-gray-700 block">
-                    {project.visualType === "R" ? "选择A类目标场景" : "选择单选场景"}
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {/* SCENARIOS FOR A or B */}
-                    {sceneOptions.map((sceneOption) => (
+              {/* === 创意模式内容 (A / B / C) === */}
+              {mainMode === "creative" && (
+                <div className="space-y-4">
+                  {/* Type A, B, C cards */}
+                  <div className="grid grid-cols-3 gap-2">
+                    {VISUAL_TYPE_OPTIONS.filter(t => t.id !== "R").map((type) => (
                       <button
-                        key={sceneOption.id}
-                        onClick={() => onUpdateProject({
-                          scene: sceneOption.id,
-                          tone: sceneOption.recommendedTone || project.tone,
-                        })}
-                        className={`px-3 py-2 text-center rounded-xl border font-semibold transition ${
-                          project.scene === sceneOption.id
-                            ? "bg-blue-600 border-blue-600 text-white shadow-sm"
-                            : "bg-gray-50 border-gray-100 text-gray-700 hover:bg-gray-100"
+                        key={type.id}
+                        onClick={() => handleVisualTypeChange(type.id as VisualTypeId)}
+                        className={`p-3 rounded-xl border text-left flex flex-col justify-between transition ${
+                          project.visualType === type.id
+                            ? "border-blue-600 bg-blue-50/50 text-blue-900 shadow-sm"
+                            : "border-gray-100 bg-gray-50 hover:bg-gray-100 text-gray-600"
                         }`}
-                        title={sceneOption.description}
                       >
-                        {sceneOption.label}
+                        <span className="font-bold text-xs">{type.label}</span>
+                        <span className="text-[9px] text-gray-400 mt-1 leading-normal">{type.description}</span>
                       </button>
                     ))}
                   </div>
-                  {project.visualType === "R" && (
-                    <p className="text-[10px] leading-relaxed text-gray-400">
-                      目标场景仅在“服装+场景替换”中完全生效；产品替换和服装替换会严格保留参考图原场景。
-                    </p>
+
+                  {/* Sub option block (A Scenarios / B Scenarios / C features list) */}
+                  {project.visualType !== 'C' ? (
+                    <div className="space-y-2">
+                      <label className="font-semibold text-gray-700 block">选择单选场景</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {sceneOptions.map((sceneOption) => (
+                          <button
+                            key={sceneOption.id}
+                            onClick={() => onUpdateProject({
+                              scene: sceneOption.id,
+                              tone: sceneOption.recommendedTone || project.tone,
+                            })}
+                            className={`px-3 py-2 text-center rounded-xl border font-semibold transition ${
+                              project.scene === sceneOption.id
+                                ? "bg-blue-600 border-blue-600 text-white shadow-sm"
+                                : "bg-gray-50 border-gray-100 text-gray-700 hover:bg-gray-100"
+                            }`}
+                            title={sceneOption.description}
+                          >
+                            {sceneOption.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="font-semibold text-gray-700 block">产品功能科技卖点 <span className="text-red-500">*</span></label>
+                        <span className="text-[10px] text-gray-400">已选 {project.productFunctions.length} 个</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-1.5 max-h-[160px] overflow-y-auto border border-gray-100 p-2 rounded-xl bg-gray-50 no-scrollbar">
+                        {SELLING_POINT_OPTIONS.map((featureOption) => {
+                          const isSel = project.productFunctions.includes(featureOption.id);
+                          return (
+                            <button
+                              key={featureOption.id}
+                              onClick={() => handleToggleProductFunction(featureOption.id)}
+                              className={`px-2 py-1.5 text-left rounded-lg text-[10px] border truncate transition ${
+                                isSel
+                                  ? "bg-blue-600 border-blue-600 text-white font-bold"
+                                  : "bg-white border-gray-100 text-gray-600 hover:bg-gray-50"
+                              }`}
+                            >
+                              {isSel ? "✓ " : "+ "} {featureOption.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
                   )}
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <label className="font-semibold text-gray-700 block">产品功能科技卖点 <span className="text-red-500">*</span></label>
-                    <span className="text-[10px] text-gray-400">已选 {project.productFunctions.length} 个</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-1.5 max-h-[160px] overflow-y-auto border border-gray-100 p-2 rounded-xl bg-gray-50 no-scrollbar">
-                    {SELLING_POINT_OPTIONS.map((featureOption) => {
-                      const isSel = project.productFunctions.includes(featureOption.id);
-                      return (
-                        <button
-                          key={featureOption.id}
-                          onClick={() => handleToggleProductFunction(featureOption.id)}
-                          className={`px-2 py-1.5 text-left rounded-lg text-[10px] border truncate transition ${
-                            isSel
-                              ? "bg-blue-600 border-blue-600 text-white font-bold"
-                              : "bg-white border-gray-100 text-gray-600 hover:bg-gray-50"
-                          }`}
-                        >
-                          {isSel ? "✓ " : "+ "} {featureOption.label}
-                        </button>
-                      );
-                    })}
-                  </div>
                 </div>
               )}
 
-              {project.visualType === "R" && (
-                <div className="space-y-2 rounded-xl border border-blue-100 bg-blue-50/40 p-3">
-                  <div>
-                    <label className="font-semibold text-blue-900 block">选择替换模式 <span className="text-red-500">*</span></label>
-                    <p className="mt-1 text-[10px] leading-relaxed text-blue-700/70">
-                      百分百复刻参考图的姿势、动作、图片视角与构图；人物身份和光影调性不作要求。
+              {/* === 替换模式内容 (R) === */}
+              {mainMode === "replacement" && (
+                <div className="space-y-4">
+                  {/* Scene selection */}
+                  <div className="space-y-2">
+                    <label className="font-semibold text-gray-700 block">选择A类目标场景</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {sceneOptions.map((sceneOption) => (
+                        <button
+                          key={sceneOption.id}
+                          onClick={() => onUpdateProject({
+                            scene: sceneOption.id,
+                            tone: sceneOption.recommendedTone || project.tone,
+                          })}
+                          className={`px-3 py-2 text-center rounded-xl border font-semibold transition ${
+                            project.scene === sceneOption.id
+                              ? "bg-blue-600 border-blue-600 text-white shadow-sm"
+                              : "bg-gray-50 border-gray-100 text-gray-700 hover:bg-gray-100"
+                          }`}
+                          title={sceneOption.description}
+                        >
+                          {sceneOption.label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[10px] leading-relaxed text-gray-400">
+                      目标场景仅在"服装+场景替换"中完全生效；产品替换和服装替换会严格保留参考图原场景。
                     </p>
                   </div>
-                  <div className="grid grid-cols-1 gap-2">
-                    {REPLACEMENT_MODE_OPTIONS.map((option) => (
-                      <button
-                        key={option.id}
-                        type="button"
-                        onClick={() => onUpdateProject({ replacementMode: option.id as ReplacementModeId })}
-                        className={`rounded-xl border px-3 py-2.5 text-left transition ${
-                          project.replacementMode === option.id
-                            ? "border-blue-600 bg-blue-600 text-white shadow-sm"
-                            : "border-blue-100 bg-white text-gray-700 hover:border-blue-300"
-                        }`}
-                      >
-                        <span className="block text-[11px] font-bold">{option.label}</span>
-                        <span className={`mt-1 block text-[9px] leading-normal ${project.replacementMode === option.id ? "text-blue-100" : "text-gray-400"}`}>
-                          {option.description}
-                        </span>
-                      </button>
-                    ))}
+
+                  {/* Replacement mode selection */}
+                  <div className="space-y-2 rounded-xl border border-blue-100 bg-blue-50/40 p-3">
+                    <div>
+                      <label className="font-semibold text-blue-900 block">选择替换模式 <span className="text-red-500">*</span></label>
+                      <p className="mt-1 text-[10px] leading-relaxed text-blue-700/70">
+                        百分百复刻参考图的姿势、动作、图片视角与构图；人物身份和光影调性不作要求。
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2">
+                      {REPLACEMENT_MODE_OPTIONS.map((option) => (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() => onUpdateProject({ replacementMode: option.id as ReplacementModeId })}
+                          className={`rounded-xl border px-3 py-2.5 text-left transition ${
+                            project.replacementMode === option.id
+                              ? "border-blue-600 bg-blue-600 text-white shadow-sm"
+                              : "border-blue-100 bg-white text-gray-700 hover:border-blue-300"
+                          }`}
+                        >
+                          <span className="block text-[11px] font-bold">{option.label}</span>
+                          <span className={`mt-1 block text-[9px] leading-normal ${project.replacementMode === option.id ? "text-blue-100" : "text-gray-400"}`}>
+                            {option.description}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
               )}
