@@ -17,6 +17,7 @@ interface CustomSelectProps {
   className?: string;
   buttonClassName?: string;
   menuClassName?: string;
+  compact?: boolean;
 }
 
 export default function CustomSelect({
@@ -28,6 +29,7 @@ export default function CustomSelect({
   className = "",
   buttonClassName = "",
   menuClassName = "",
+  compact = false,
 }: CustomSelectProps) {
   const [open, setOpen] = React.useState(false);
   const [menuStyle, setMenuStyle] = React.useState<React.CSSProperties>({});
@@ -111,16 +113,16 @@ export default function CustomSelect({
                   onChange(option.value);
                   setOpen(false);
                 }}
-                className={`group flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left transition-colors ${
+                className={`group flex w-full items-center gap-2 rounded-xl text-left transition-colors ${compact ? "px-2.5 py-2" : "px-3 py-2.5"} ${
                   active
                     ? "bg-blue-600 text-white shadow-sm"
                     : "text-slate-700 hover:bg-blue-50 hover:text-blue-700"
                 }`}
               >
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-xs font-semibold">{option.label}</span>
+                  <span className={`block truncate font-semibold ${compact ? "text-[10px]" : "text-xs"}`}>{option.label}</span>
                   {option.description && (
-                    <span className={`mt-0.5 block truncate text-[10px] ${active ? "text-blue-100" : "text-slate-400 group-hover:text-blue-500"}`}>
+                    <span className={`mt-0.5 block truncate ${compact ? "text-[8px]" : "text-[10px]"} ${active ? "text-blue-100" : "text-slate-400 group-hover:text-blue-500"}`}>
                       {option.description}
                     </span>
                   )}

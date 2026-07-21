@@ -13,6 +13,7 @@ export interface ReferenceImage {
   storageKey?: string;
   analysis?: AssetAnalysis;
   replacementCategory?: 'scene' | 'upper_garment' | 'lower_garment' | 'composition' | 'action';
+  personSlotId?: string;
 }
 
 export interface ImageAsset {
@@ -30,16 +31,34 @@ export interface ImageAsset {
   analysis?: AssetAnalysis;
 }
 
+export type PersonSlotOperation = 'keep' | 'replace_product' | 'replace_all' | 'remove';
+export type PersonSlotPosition = 'left' | 'center' | 'right' | 'front' | 'back';
+
+export interface PersonBinding {
+  slotId: string;
+  label: string;
+  sourcePosition: PersonSlotPosition;
+  operation: PersonSlotOperation;
+  characterImageId?: string;
+  productImageId?: string;
+  upperGarmentImageId?: string;
+  lowerGarmentImageId?: string;
+}
+
 export interface ModeWorkspace {
   productImages: ImageAsset[];
   characterImages: ImageAsset[];
   modelCount: number;
   modelSource?: 'none' | 'default' | 'custom';
+  multiPersonMode?: boolean;
+  personBindings?: PersonBinding[];
   referenceImages: ReferenceImage[];
+  referencePromptWeight?: 'low' | 'medium' | 'high';
   visualType: VisualTypeId;
   replacementMode?: ReplacementModeId;
   replacementWorkflow?: 'pose_rebuild' | 'product_only' | 'multi_replace';
   scene?: string;
+  sceneSource?: 'preset' | 'reference';
   productFunctions: string[];
   shotScale: string;
   cameraAngle: string;
@@ -66,6 +85,7 @@ export interface Task {
   visualType: VisualTypeId;
   replacementMode?: ReplacementModeId;
   scene?: string;
+  sceneSource?: 'preset' | 'reference';
   productFunctions: string[];
   shotScale: string; // '全景' | '中景' | '近景' | '特写' | '大特写'
   cameraAngle: string; // '平视' | '仰视' | '俯视'
@@ -112,14 +132,18 @@ export interface Project {
   characterImages: ImageAsset[];
   modelCount: number;
   modelSource?: 'none' | 'default' | 'custom';
+  multiPersonMode?: boolean;
+  personBindings?: PersonBinding[];
   workspaceMode?: 'creative' | 'replacement';
   creativeWorkspace?: ModeWorkspace;
   replacementWorkspace?: ModeWorkspace;
   referenceImages: ReferenceImage[];
+  referencePromptWeight?: 'low' | 'medium' | 'high';
   visualType: VisualTypeId;
   replacementMode?: ReplacementModeId;
   replacementWorkflow?: 'pose_rebuild' | 'product_only' | 'multi_replace';
   scene?: string;
+  sceneSource?: 'preset' | 'reference';
   productFunctions: string[];
   shotScale: string;
   cameraAngle: string;

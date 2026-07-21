@@ -19,11 +19,75 @@ import { PRODUCT_TEMPLATES, CHARACTER_TEMPLATES, REF_TEMPLATES } from "./data/mo
 import { Sparkles, Calendar, BookOpen, Layers, Clock, ArrowLeftRight, Check, Play, Settings, Plus, Save, Compass, HelpCircle, User, ChevronDown } from "lucide-react";
 
 function getActiveCharacterImages(project: Project) {
-  return project.modelSource === "custom" && project.replacementWorkflow !== "product_only" ? project.characterImages : [];
+  return project.modelSource === "custom" && project.replacementWorkflow !== "product_only"
+    ? project.characterImages.slice(0, Math.max(0, Math.min(2, project.modelCount)))
+    : [];
 }
 
 function getReferencePromptName(asset: ReferenceImage) {
-  return asset.replacementCategory ? `[${asset.replacementCategory}] ${asset.name}` : asset.name;
+  const personPrefix = asset.personSlotId
+    ? `[person-${asset.personSlotId.replace("person-", "").toUpperCase()}]`
+    : "";
+  return asset.replacementCategory ? `${personPrefix}[${asset.replacementCategory}] ${asset.name}` : asset.name;
+}
+
+function getProjectSceneSource(project: Project): "preset" | "reference" {
+  return project.sceneSource
+    || (project.referenceImages.some((asset) => asset.replacementCategory === "scene") ? "reference" : "preset");
+}
+
+function getActiveReferenceImages(project: Project) {
+  if (project.visualType !== "R") return project.referenceImages;
+  const workflow = project.replacementWorkflow || "multi_replace";
+  if (workflow === "product_only") {
+    return project.referenceImages.filter((asset) => asset.replacementCategory === "scene").slice(0, 1);
+  }
+  if (workflow === "pose_rebuild") {
+    return project.referenceImages.filter((asset) => asset.replacementCategory === "action" || (asset.replacementCategory === "scene" && getProjectSceneSource(project) === "reference"));
+  }
+  return project.referenceImages.filter((asset) => asset.replacementCategory !== "scene" || getProjectSceneSource(project) === "reference");
+}
+
+function getProjectReferencePromptName(project: Project, asset: ReferenceImage) {
+  if (project.visualType === "R" && project.replacementWorkflow === "product_only" && asset.replacementCategory === "scene") {
+    return `[base_image] ${asset.name}`;
+  }
+  return getReferencePromptName(asset);
+}
+
+function getProjectReferenceWeight(project: Project, asset: ReferenceImage) {
+  return project.visualType === "R" && project.replacementWorkflow === "product_only" ? "high" as const : asset.weight;
+}
+
+function getCharacterPromptName(project: Project, asset: ImageAsset, index: number) {
+  if (project.visualType !== "R") return asset.name;
+  const bindingIndex = (project.personBindings || []).findIndex((binding) => binding.characterImageId === asset.id);
+  const slotIndex = bindingIndex >= 0 ? bindingIndex : index;
+  const slotTag = project.multiPersonMode ? `[person-${String.fromCharCode(65 + slotIndex)}]` : "";
+  const identityTag = project.replacementWorkflow === "pose_rebuild" ? "[identity-lock]" : "";
+  return `${identityTag}${slotTag} ${asset.name}`.trim();
+}
+
+function getPromptCharacterNames(project: Project) {
+  return getActiveCharacterImages(project).map((asset, index) =>
+    getCharacterPromptName(project, asset, index),
+  );
+}
+
+function getCharacterReferenceRole(project: Project): "character_identity" | "character_garment_reference" {
+  if (project.visualType === "R" && project.replacementWorkflow === "pose_rebuild") return "character_identity";
+  return project.visualType === "R"
+    && (project.replacementMode === "服装+场景替换" || project.replacementMode === "服装替换")
+    ? "character_garment_reference"
+    : "character_identity";
+}
+
+function getProductPromptName(project: Project, asset: ImageAsset) {
+  if (project.visualType !== "R" || project.replacementWorkflow === "product_only" || !project.multiPersonMode) return asset.name;
+  const slots = (project.personBindings || [])
+    .map((binding, index) => binding.productImageId === asset.id ? String.fromCharCode(65 + index) : "")
+    .filter(Boolean);
+  return slots.length ? `[product-for-${slots.join("+")}] ${asset.name}` : asset.name;
 }
 
 function snapshotModeWorkspace(project: Project): ModeWorkspace {
@@ -32,11 +96,15 @@ function snapshotModeWorkspace(project: Project): ModeWorkspace {
     characterImages: project.characterImages,
     modelCount: project.modelCount,
     modelSource: project.modelSource,
+    multiPersonMode: project.multiPersonMode,
+    personBindings: project.personBindings,
     referenceImages: project.referenceImages,
+    referencePromptWeight: project.referencePromptWeight,
     visualType: project.visualType,
     replacementMode: project.replacementMode,
     replacementWorkflow: project.replacementWorkflow,
     scene: project.scene,
+    sceneSource: project.sceneSource,
     productFunctions: project.productFunctions,
     shotScale: project.shotScale,
     cameraAngle: project.cameraAngle,
@@ -52,11 +120,15 @@ function createEmptyModeWorkspace(mode: "creative" | "replacement"): ModeWorkspa
     characterImages: [],
     modelCount: 1,
     modelSource: "default",
+    multiPersonMode: false,
+    personBindings: [],
     referenceImages: [],
+    referencePromptWeight: "medium",
     visualType,
     replacementMode: "服装+场景替换",
     replacementWorkflow: "multi_replace",
     scene: getDefaultScene(visualType),
+    sceneSource: "preset",
     productFunctions: [],
     shotScale: "中景",
     cameraAngle: "平视",
@@ -71,49 +143,73 @@ function getPromptAssets(project: Project): PromptImageInput[] {
       .filter((asset) => asset.url.startsWith("data:image/"))
       .map((asset) => ({
         id: asset.id,
-        name: asset.name,
+        name: getProductPromptName(project, asset),
         role: asset.isMain ? "product_master" as const : "product_detail" as const,
         dataUrl: asset.url,
         weight: asset.isMain ? "high" as const : "medium" as const,
       })),
     ...getActiveCharacterImages(project)
       .filter((asset) => asset.url.startsWith("data:image/"))
-      .map((asset) => ({
+      .map((asset, index) => ({
         id: asset.id,
-        name: asset.name,
-        role: project.visualType === "R"
-          && (project.replacementMode === "服装+场景替换" || project.replacementMode === "服装替换")
-          ? "character_garment_reference" as const
-          : "character_identity" as const,
+        name: getCharacterPromptName(project, asset, index),
+        role: getCharacterReferenceRole(project),
         dataUrl: asset.url,
         weight: "high" as const,
       })),
-    ...project.referenceImages
+    ...getActiveReferenceImages(project)
       .filter((asset) => asset.url.startsWith("data:image/"))
       .map((asset) => ({
         id: asset.id,
-        name: getReferencePromptName(asset),
+        name: getProjectReferencePromptName(project, asset),
         role: project.visualType === "R" ? "replacement_reference" as const : "style_reference" as const,
         dataUrl: asset.url,
-        weight: asset.weight,
+        weight: project.replacementWorkflow === "product_only" ? "high" as const : asset.weight,
+        referenceCategory: project.replacementWorkflow === "product_only"
+          ? "base_image" as const
+          : asset.replacementCategory,
       })),
   ];
 }
 
 function getPromptAssetMetadata(project: Project) {
-  return getPromptAssets(project).map(({ name, role, weight }) => ({ name, role, weight }));
+  return getPromptAssets(project).map(({ name, role, weight, referenceCategory }) => ({ name, role, weight, referenceCategory }));
+}
+
+function getPromptPersonBindings(project: Project) {
+  if (project.visualType !== "R" || project.replacementWorkflow === "product_only") return [];
+  return (project.personBindings || []).slice(0, 2).map((binding, index) => ({
+    ...binding,
+    sourcePosition: project.replacementWorkflow === "pose_rebuild" ? "" : binding.sourcePosition,
+    characterImage: (() => {
+      const image = project.characterImages.find((item) => item.id === binding.characterImageId) || project.characterImages[index];
+      return image ? getCharacterPromptName(project, image, index) : undefined;
+    })(),
+    productImage: (() => {
+      const image = project.productImages.find((item) => item.id === binding.productImageId) || project.productImages[0];
+      return image ? getProductPromptName(project, image) : undefined;
+    })(),
+    upperGarmentImage: (() => {
+      const image = project.referenceImages.find((item) => item.id === binding.upperGarmentImageId);
+      return image ? getProjectReferencePromptName(project, image) : undefined;
+    })(),
+    lowerGarmentImage: (() => {
+      const image = project.referenceImages.find((item) => item.id === binding.lowerGarmentImageId);
+      return image ? getProjectReferencePromptName(project, image) : undefined;
+    })(),
+  }));
 }
 
 function getProjectImageAnalyses(project: Project): AssetAnalysis[] {
-  const characterRole = project.visualType === "R"
-    && (project.replacementMode === "服装+场景替换" || project.replacementMode === "服装替换")
-    ? "character_garment_reference"
-    : "character_identity";
-  const referenceRole = project.visualType === "R" ? "replacement_reference" : "style_reference";
+  const characterRole = getCharacterReferenceRole(project);
   return [
     ...project.productImages.map((asset) => asset.analysis),
     ...getActiveCharacterImages(project).map((asset) => asset.analysis?.role === characterRole ? asset.analysis : undefined),
-    ...project.referenceImages.map((asset) => asset.analysis?.role === referenceRole ? asset.analysis : undefined),
+    // Replacement references are interpreted directly from their category tags at generation time.
+    // Reusing their generic visual analyses can leak background/scene observations across roles.
+    ...(project.visualType === "R"
+      ? []
+      : project.referenceImages.map((asset) => asset.analysis?.role === "style_reference" ? asset.analysis : undefined)),
   ].filter((analysis): analysis is AssetAnalysis => Boolean(analysis));
 }
 
@@ -193,9 +289,13 @@ const DEMO_PROJECT: Project = {
   characterImages: [],
   modelCount: 1,
   modelSource: "default",
+  multiPersonMode: false,
+  personBindings: [],
   referenceImages: [],
+  referencePromptWeight: "medium",
   visualType: "B",
-  scene: "居家柔弹与立体包裹",
+      scene: "居家柔弹与立体包裹",
+  sceneSource: "preset",
   productFunctions: [],
   shotScale: "中景",
   cameraAngle: "平视",
@@ -233,6 +333,7 @@ export default function App() {
   const [generationError, setGenerationError] = useState<GenerationFailure | null>(null);
   const [actualPromptPreviewEnglish, setActualPromptPreviewEnglish] = useState("");
   const [actualPromptPreviewChinese, setActualPromptPreviewChinese] = useState("");
+  const [promptStructureWarnings, setPromptStructureWarnings] = useState<string[]>([]);
   const [isPromptPreviewLoading, setIsPromptPreviewLoading] = useState(false);
 
   // Editing Modals States
@@ -291,9 +392,11 @@ export default function App() {
         const normalizedProject: Project = {
           ...project,
           modelCount: Number.isFinite(project.modelCount)
-            ? Math.max(0, Math.min(4, project.modelCount))
+            ? Math.max(0, Math.min(2, project.modelCount))
             : Math.max(1, project.characterImages.length),
           modelSource: project.modelSource || (project.modelCount === 0 ? "none" : project.characterImages.length ? "custom" : "default"),
+          multiPersonMode: Boolean(project.multiPersonMode),
+          personBindings: Array.isArray(project.personBindings) ? project.personBindings : [],
           scene,
           replacementMode: project.replacementMode || "服装+场景替换",
           replacementWorkflow: project.replacementWorkflow || "multi_replace",
@@ -319,6 +422,19 @@ export default function App() {
           replacementWorkspace = { ...creativeWorkspace, visualType: "R", replacementMode: creativeWorkspace.replacementMode || "服装+场景替换" };
           creativeWorkspace = createEmptyModeWorkspace("creative");
         }
+        const capWorkspacePeople = (workspace: ModeWorkspace): ModeWorkspace => {
+          const modelCount = Math.max(0, Math.min(2, Number.isFinite(workspace.modelCount) ? workspace.modelCount : 1));
+          return {
+            ...workspace,
+            modelCount,
+            modelSource: modelCount === 0 ? "none" : workspace.modelSource,
+            multiPersonMode: modelCount === 2,
+            characterImages: workspace.characterImages.slice(0, modelCount),
+            personBindings: (workspace.personBindings || []).slice(0, modelCount),
+          };
+        };
+        creativeWorkspace = capWorkspacePeople(creativeWorkspace);
+        replacementWorkspace = capWorkspacePeople(replacementWorkspace);
         const activeWorkspace = workspaceMode === "replacement" ? replacementWorkspace : creativeWorkspace;
         return {
           ...normalizedProject,
@@ -351,7 +467,7 @@ export default function App() {
         .map((task: Task) => ({
           ...task,
           replacementMode: task.replacementMode || "服装+场景替换",
-          modelCount: Number.isFinite(task.modelCount) ? task.modelCount : Math.max(1, task.characterImages.length),
+          modelCount: Number.isFinite(task.modelCount) ? Math.max(0, Math.min(2, task.modelCount)) : Math.max(1, Math.min(2, task.characterImages.length)),
           negativePrompt: task.negativePrompt || "",
           promptConfigVersion: task.promptConfigVersion || "legacy",
           selectedPromptFragments: task.selectedPromptFragments || [],
@@ -381,6 +497,7 @@ export default function App() {
     visualType: currentProject.visualType,
     replacementMode: currentProject.replacementMode,
     replacementWorkflow: currentProject.replacementWorkflow,
+    sceneSource: getProjectSceneSource(currentProject),
     scene: currentProject.scene,
     productFunctions: currentProject.productFunctions,
     shotScale: currentProject.shotScale,
@@ -391,12 +508,14 @@ export default function App() {
     aspectRatio: currentProject.aspectRatio,
     imageCount: currentProject.imageCount,
     modelCount: currentProject.modelCount,
+    multiPersonMode: Boolean(currentProject.multiPersonMode),
+    personBindings: getPromptPersonBindings(currentProject),
     productImages: currentProject.productImages.map((item) => item.name),
-    characterImages: getActiveCharacterImages(currentProject).map((item) => item.name),
-    referenceImages: currentProject.referenceImages.map(getReferencePromptName),
-    referenceImageWeights: currentProject.referenceImages.map((item) => ({
-      name: getReferencePromptName(item),
-      weight: item.weight,
+    characterImages: getPromptCharacterNames(currentProject),
+    referenceImages: getActiveReferenceImages(currentProject).map((item) => getProjectReferencePromptName(currentProject, item)),
+    referenceImageWeights: getActiveReferenceImages(currentProject).map((item) => ({
+      name: getProjectReferencePromptName(currentProject, item),
+      weight: getProjectReferenceWeight(currentProject, item),
     })),
     imageAnalyses: getProjectImageAnalyses(currentProject),
     assetMetadata: getPromptAssetMetadata(currentProject),
@@ -417,6 +536,7 @@ export default function App() {
         if (!response.ok) throw new Error(data?.error || "实际生图提示词生成失败。");
         setActualPromptPreviewEnglish(String(data.prompt || ""));
         setActualPromptPreviewChinese(String(data.displayPromptChinese || ""));
+        setPromptStructureWarnings(Array.isArray(data.warnings) ? data.warnings.map(String) : []);
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
         console.error("Prompt preview failed:", error);
@@ -435,6 +555,11 @@ export default function App() {
 
   // Update current project parameters
   const handleUpdateProject = (updates: Partial<Project>) => {
+    if ("replacementWorkflow" in updates || "visualType" in updates) {
+      setActualPromptPreviewEnglish("");
+      setActualPromptPreviewChinese("");
+      setIsPromptPreviewLoading(true);
+    }
     const updated = projects.map(p => {
       if (p.id === currentProjectId) {
         const shouldInvalidatePrompt = !("optimizedPrompt" in updates);
@@ -484,14 +609,18 @@ export default function App() {
       characterImages: [],
       modelCount: 1,
       modelSource: "default",
+      multiPersonMode: false,
+      personBindings: [],
       workspaceMode: "creative",
       creativeWorkspace: createEmptyModeWorkspace("creative"),
       replacementWorkspace: createEmptyModeWorkspace("replacement"),
       referenceImages: [],
+      referencePromptWeight: "medium",
       visualType: "A",
       replacementMode: "服装+场景替换",
       replacementWorkflow: "multi_replace",
       scene: "海边自在",
+      sceneSource: "preset",
       productFunctions: [],
       shotScale: "中景",
       cameraAngle: "平视",
@@ -540,6 +669,7 @@ export default function App() {
           visualType: currentProject.visualType,
           replacementMode: currentProject.replacementMode,
           replacementWorkflow: currentProject.replacementWorkflow,
+          sceneSource: getProjectSceneSource(currentProject),
           scene: currentProject.scene,
           productFunctions: currentProject.productFunctions,
           shotScale: currentProject.shotScale,
@@ -551,11 +681,11 @@ export default function App() {
           imageCount: currentProject.imageCount,
           modelCount: currentProject.modelCount,
           productImages: currentProject.productImages.map(p => p.name || "巴迪高核心主图"),
-          characterImages: getActiveCharacterImages(currentProject).map(c => c.name || "参考人物形象"),
-          referenceImages: currentProject.referenceImages.map(r => getReferencePromptName(r) || "参考风格图"),
-          referenceImageWeights: currentProject.referenceImages.map(r => ({
-            name: getReferencePromptName(r) || "参考风格图",
-            weight: r.weight,
+          characterImages: getPromptCharacterNames(currentProject),
+          referenceImages: getActiveReferenceImages(currentProject).map(r => getProjectReferencePromptName(currentProject, r) || "参考风格图"),
+          referenceImageWeights: getActiveReferenceImages(currentProject).map(r => ({
+            name: getProjectReferencePromptName(currentProject, r) || "参考风格图",
+            weight: getProjectReferenceWeight(currentProject, r),
           })),
           assets,
           imageAnalyses: existingAnalyses,
@@ -577,10 +707,7 @@ export default function App() {
           })),
           characterImages: currentProject.characterImages.map((asset) => ({
             ...asset,
-            role: currentProject.visualType === "R"
-              && (currentProject.replacementMode === "服装+场景替换" || currentProject.replacementMode === "服装替换")
-              ? "character_garment_reference"
-              : "character_identity",
+            role: getCharacterReferenceRole(currentProject),
             analysis: analysisById.get(asset.id) || asset.analysis,
           })),
           referenceImages: currentProject.referenceImages.map((asset) => ({
@@ -648,6 +775,7 @@ export default function App() {
           visualType: generationProject.visualType,
           replacementMode: generationProject.replacementMode,
           replacementWorkflow: generationProject.replacementWorkflow,
+          sceneSource: getProjectSceneSource(generationProject),
           scene: generationProject.scene,
           productFunctions: generationProject.productFunctions,
           shotScale: generationProject.shotScale,
@@ -658,12 +786,14 @@ export default function App() {
           aspectRatio: generationProject.aspectRatio,
           imageCount: generationProject.imageCount,
           modelCount: generationProject.modelCount,
+          multiPersonMode: Boolean(generationProject.multiPersonMode),
+          personBindings: getPromptPersonBindings(generationProject),
           productImages: generationProject.productImages.map((item) => item.name),
-          characterImages: getActiveCharacterImages(generationProject).map((item) => item.name),
-          referenceImages: generationProject.referenceImages.map(getReferencePromptName),
-          referenceImageWeights: generationProject.referenceImages.map((item) => ({
-            name: getReferencePromptName(item),
-            weight: item.weight,
+          characterImages: getPromptCharacterNames(generationProject),
+          referenceImages: getActiveReferenceImages(generationProject).map((item) => getProjectReferencePromptName(generationProject, item)),
+          referenceImageWeights: getActiveReferenceImages(generationProject).map((item) => ({
+            name: getProjectReferencePromptName(generationProject, item),
+            weight: getProjectReferenceWeight(generationProject, item),
           })),
           imageAnalyses: getProjectImageAnalyses(generationProject),
           assets: getPromptAssets(generationProject),
@@ -764,7 +894,8 @@ export default function App() {
       resolution: task.resolution,
       aspectRatio: task.aspectRatio,
       imageCount: task.imageCount,
-      modelCount: task.modelCount,
+      modelCount: Math.max(0, Math.min(2, task.modelCount)),
+      multiPersonMode: task.modelCount >= 2,
       originalPrompt: task.originalPrompt,
       optimizedPrompt: task.optimizedPrompt,
       optimizedPromptEnglish: task.optimizedPromptEnglish || "",
@@ -944,6 +1075,7 @@ export default function App() {
                 isGenerating={isGenerating}
                 actualPromptPreviewEnglish={actualPromptPreviewEnglish}
                 actualPromptPreviewChinese={actualPromptPreviewChinese}
+                promptStructureWarnings={promptStructureWarnings}
                 isPromptPreviewLoading={isPromptPreviewLoading}
               />
             </div>
@@ -967,7 +1099,7 @@ export default function App() {
                   id: `ref-task-${Date.now()}`,
                   name: `来自生成成果的参考图`,
                   url: url,
-                  weight: "medium"
+                  weight: currentProject.referencePromptWeight || "medium"
                 };
                 handleUpdateProject({ referenceImages: [...currentProject.referenceImages.slice(0, 4), newRef] });
               }}

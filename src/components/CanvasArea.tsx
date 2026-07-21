@@ -44,6 +44,7 @@ export default function CanvasArea({
 
   // Immersive preview state
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const [previewVersionIndex, setPreviewVersionIndex] = useState(0);
   const [zoomLevel, setZoomLevel] = useState(100);
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -58,6 +59,30 @@ export default function CanvasArea({
   const getLatestImageUrl = (task: Task, originalUrl: string) => {
     const versions = task.editVersions[originalUrl] || [];
     return versions[versions.length - 1] || originalUrl;
+  };
+
+  const getImageVersionUrls = (task: Task, originalUrl: string) => [
+    originalUrl,
+    ...(task.editVersions[originalUrl] || []),
+  ];
+
+  const navigatePreview = (direction: -1 | 1) => {
+    if (previewIndex === null || !currentTask?.results.length) return;
+    const currentOriginal = currentTask.results[previewIndex];
+    const currentVersions = getImageVersionUrls(currentTask, currentOriginal);
+    const nextVersionIndex = previewVersionIndex + direction;
+
+    if (nextVersionIndex >= 0 && nextVersionIndex < currentVersions.length) {
+      setPreviewVersionIndex(nextVersionIndex);
+    } else {
+      const nextResultIndex = (previewIndex + direction + currentTask.results.length) % currentTask.results.length;
+      const nextOriginal = currentTask.results[nextResultIndex];
+      const nextVersions = getImageVersionUrls(currentTask, nextOriginal);
+      setPreviewIndex(nextResultIndex);
+      setPreviewVersionIndex(direction === -1 ? nextVersions.length - 1 : 0);
+    }
+    setZoomLevel(100);
+    setPanOffset({ x: 0, y: 0 });
   };
 
   // Download logic (creates a standard download trigger)
@@ -104,13 +129,9 @@ export default function CanvasArea({
     
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "ArrowRight") {
-        setPreviewIndex((previewIndex + 1) % currentTask.results.length);
-        setZoomLevel(100);
-        setPanOffset({ x: 0, y: 0 });
+        navigatePreview(1);
       } else if (e.key === "ArrowLeft") {
-        setPreviewIndex((previewIndex - 1 + currentTask.results.length) % currentTask.results.length);
-        setZoomLevel(100);
-        setPanOffset({ x: 0, y: 0 });
+        navigatePreview(-1);
       } else if (e.key === "Escape") {
         setPreviewIndex(null);
       }
@@ -118,7 +139,7 @@ export default function CanvasArea({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [previewIndex, currentTask]);
+  }, [previewIndex, previewVersionIndex, currentTask]);
 
   // Drag to Pan inside Zoom view
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -151,6 +172,11 @@ export default function CanvasArea({
       case "16:9": return "aspect-[16/9]";
       default: return "aspect-[3/4]";
     }
+  };
+
+  const getAspectRatioValue = () => {
+    const [width, height] = project.aspectRatio.split(":").map(Number);
+    return width > 0 && height > 0 ? width / height : 3 / 4;
   };
 
   return (
@@ -661,6 +687,7 @@ export default function CanvasArea({
                       <button
                         onClick={() => {
                           setPreviewIndex(i);
+                          setPreviewVersionIndex(getImageVersionUrls(currentTask, imgUrl).length - 1);
                           setZoomLevel(100);
                           setPanOffset({ x: 0, y: 0 });
                         }}
@@ -739,7 +766,12 @@ export default function CanvasArea({
           <div className="w-full flex items-center justify-between text-white border-b border-white/10 pb-3">
             <div>
               <span className="text-xs uppercase font-mono tracking-widest text-gray-400">巴迪高商业视觉放大</span>
-              <h4 className="text-sm font-semibold mt-0.5">款式 #{previewIndex + 1} / {currentTask.results.length}</h4>
+              <h4 className="text-sm font-semibold mt-0.5">
+                款式 #{previewIndex + 1} / {currentTask.results.length}
+                <span className="ml-2 text-xs font-normal text-blue-300">
+                  版本 {previewVersionIndex + 1} / {getImageVersionUrls(currentTask, currentTask.results[previewIndex]).length}
+                </span>
+              </h4>
             </div>
             
             {/* Zoom operations */}
@@ -785,9 +817,7 @@ export default function CanvasArea({
             {/* Prev key */}
             <button
               onClick={() => {
-                setPreviewIndex((previewIndex - 1 + currentTask.results.length) % currentTask.results.length);
-                setZoomLevel(100);
-                setPanOffset({ x: 0, y: 0 });
+                navigatePreview(-1);
               }}
               className="absolute left-4 z-10 p-3 rounded-full bg-white/10 hover:bg-white/20 text-white transition active:scale-95"
             >
@@ -796,7 +826,7 @@ export default function CanvasArea({
 
             {/* Centered Image (Uses exact same composite renderer for consistency!) */}
             <div
-              className={`flex-1 flex items-center justify-center overflow-hidden max-h-[75vh] cursor-grab ${
+              className={`flex-1 flex items-center justify-center overflow-hidden max-h-[78vh] cursor-grab ${
                 isDragging ? "cursor-grabbing" : ""
               }`}
               onMouseDown={handleMouseDown}
@@ -805,8 +835,9 @@ export default function CanvasArea({
               onMouseLeave={handleMouseUp}
             >
               <div 
-                className={`w-[450px] max-w-full rounded-2xl overflow-hidden shadow-2xl border border-white/10 ${getAspectRatioClass()}`}
+                className={`max-w-[86vw] rounded-2xl overflow-hidden shadow-2xl border border-white/10 ${getAspectRatioClass()}`}
                 style={{
+                  width: `min(86vw, calc(78vh * ${getAspectRatioValue()}))`,
                   transform: `scale(${zoomLevel / 100}) translate(${panOffset.x}px, ${panOffset.y}px)`,
                   transition: isDragging ? "none" : "transform 0.1s ease-out"
                 }}
@@ -847,10 +878,7 @@ export default function CanvasArea({
                     : "https://images.unsplash.com/photo-1528158229374-4f24f855de00?q=80&w=600";
 
                   const imgUrl = currentTask.results[previewIndex];
-                  const hasEdited = currentTask.editVersions[imgUrl] && currentTask.editVersions[imgUrl].length > 0;
-                  const displayUrl = hasEdited 
-                    ? currentTask.editVersions[imgUrl][currentTask.editVersions[imgUrl].length - 1] 
-                    : imgUrl;
+                  const displayUrl = getImageVersionUrls(currentTask, imgUrl)[previewVersionIndex] || getLatestImageUrl(currentTask, imgUrl);
 
                   const cardStyle = previewIndex % 4;
                   const toneFilterClass = isWarm 
@@ -1068,9 +1096,7 @@ export default function CanvasArea({
             {/* Next key */}
             <button
               onClick={() => {
-                setPreviewIndex((previewIndex + 1) % currentTask.results.length);
-                setZoomLevel(100);
-                setPanOffset({ x: 0, y: 0 });
+                navigatePreview(1);
               }}
               className="absolute right-4 z-10 p-3 rounded-full bg-white/10 hover:bg-white/20 text-white transition active:scale-95"
             >
@@ -1087,8 +1113,8 @@ export default function CanvasArea({
               <button
                 onClick={() => {
                   const originalUrl = currentTask.results[previewIndex!];
-                  const versions = currentTask.editVersions[originalUrl] || [];
-                  onOpenEditor(versions[versions.length - 1] || originalUrl, originalUrl);
+                  const displayedVersion = getImageVersionUrls(currentTask, originalUrl)[previewVersionIndex] || getLatestImageUrl(currentTask, originalUrl);
+                  onOpenEditor(displayedVersion, originalUrl);
                 }}
                 className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl transition flex items-center gap-1.5"
               >
@@ -1098,7 +1124,8 @@ export default function CanvasArea({
               <button
                 onClick={() => {
                   const originalUrl = currentTask.results[previewIndex!];
-                  downloadImage(getLatestImageUrl(currentTask, originalUrl), previewIndex!);
+                  const displayedVersion = getImageVersionUrls(currentTask, originalUrl)[previewVersionIndex] || getLatestImageUrl(currentTask, originalUrl);
+                  downloadImage(displayedVersion, previewIndex!);
                 }}
                 className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold rounded-xl transition flex items-center gap-1.5"
               >

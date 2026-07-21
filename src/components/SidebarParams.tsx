@@ -1,6 +1,6 @@
 import React, { useRef } from "react";
-import { Project, ImageAsset, ReferenceImage, Task, type ModeWorkspace } from "../types";
-import { Upload, X, Star, Sparkles, AlertCircle, Info, ChevronDown, ChevronUp, RefreshCw, Trash, Copy, Check } from "lucide-react";
+import { Project, ImageAsset, ReferenceImage, Task, type ModeWorkspace, type PersonBinding } from "../types";
+import { Upload, X, Star, Sparkles, AlertCircle, Info, ChevronDown, ChevronUp, RefreshCw, Trash, Copy, Check, UsersRound } from "lucide-react";
 import {
   ASPECT_RATIO_OPTIONS,
   CAMERA_ANGLE_OPTIONS,
@@ -31,6 +31,7 @@ interface SidebarParamsProps {
   isGenerating: boolean;
   actualPromptPreviewEnglish: string;
   actualPromptPreviewChinese: string;
+  promptStructureWarnings: string[];
   isPromptPreviewLoading: boolean;
 }
 
@@ -45,6 +46,7 @@ export default function SidebarParams({
   isGenerating,
   actualPromptPreviewEnglish,
   actualPromptPreviewChinese,
+  promptStructureWarnings,
   isPromptPreviewLoading,
 }: SidebarParamsProps) {
   // Collapsible section state
@@ -59,10 +61,33 @@ export default function SidebarParams({
   const modelCount = project.modelCount;
   const [copiedPrompt, setCopiedPrompt] = React.useState<"positive" | "negative" | "actual" | null>(null);
   const mainMode = project.workspaceMode || (project.visualType === "R" ? "replacement" : "creative");
-  const [sceneInputMode, setSceneInputMode] = React.useState<"preset" | "reference">(
-    project.referenceImages.some((image) => image.replacementCategory === "scene") ? "reference" : "preset"
-  );
+  const sceneInputMode = project.sceneSource
+    || (project.referenceImages.some((image) => image.replacementCategory === "scene") ? "reference" : "preset");
   const activeUploadIndexRef = useRef<number>(0);
+
+  const normalizePersonBindings = (count: number, existing = project.personBindings || []): PersonBinding[] => {
+    count = Math.max(0, Math.min(2, count));
+    const defaultPositions: PersonBinding["sourcePosition"][] = count === 2
+      ? ["left", "right"]
+      : count === 3
+        ? ["left", "center", "right"]
+        : ["left", "center", "right", "back"];
+    return Array.from({ length: count }, (_, index) => existing[index] || {
+      slotId: `person-${String.fromCharCode(65 + index).toLowerCase()}`,
+      label: `人物 ${String.fromCharCode(65 + index)}`,
+      sourcePosition: defaultPositions[index] || "center",
+      operation: "replace_all",
+      characterImageId: project.characterImages[index]?.id,
+      productImageId: project.productImages[0]?.id,
+    });
+  };
+
+  const updatePersonBinding = (slotId: string, updates: Partial<PersonBinding>) => {
+    onUpdateProject({
+      personBindings: normalizePersonBindings(Math.max(1, Math.min(2, project.modelCount))).map((binding) =>
+        binding.slotId === slotId ? { ...binding, ...updates } : binding),
+    });
+  };
 
   const copyPrompt = async (text: string, type: "positive" | "negative" | "actual") => {
     await navigator.clipboard.writeText(text);
@@ -77,6 +102,7 @@ export default function SidebarParams({
   }, [project.characterImages, project.modelCount, onUpdateProject]);
 
   const handleModelCountChange = (count: number) => {
+    count = Math.max(0, Math.min(2, count));
     onUpdateProject({
       modelCount: count,
       modelSource: count === 0 ? "none" : project.characterImages.some((image) => image.url) ? "custom" : "default",
@@ -89,13 +115,43 @@ export default function SidebarParams({
   };
 
   // Helper file uploader refs
-  const productInputRef = useRef<HTMLInputElement>(null);
-  const characterInputRef = useRef<HTMLInputElement>(null);
-  const referenceInputRef = useRef<HTMLInputElement>(null);
+  const replacementProductInputRef = useRef<HTMLInputElement>(null);
+  const creativeProductInputRef = useRef<HTMLInputElement>(null);
+  const replacementCharacterInputRef = useRef<HTMLInputElement>(null);
+  const creativeCharacterInputRef = useRef<HTMLInputElement>(null);
+  const replacementReferenceInputRef = useRef<HTMLInputElement>(null);
+  const creativeReferenceInputRef = useRef<HTMLInputElement>(null);
   const activeReferenceCategoryRef = useRef<ReplacementReferenceCategory | undefined>(undefined);
+  const activePersonSlotRef = useRef<string | undefined>(undefined);
+
+  const isReferenceActiveForCurrentWorkflow = (image: Pick<ReferenceImage, "replacementCategory">) => {
+    if (project.visualType !== "R") return true;
+    const workflow = project.replacementWorkflow || "multi_replace";
+    if (workflow === "product_only") return image.replacementCategory === "scene";
+    if (workflow === "pose_rebuild") {
+      return image.replacementCategory === "action" || (image.replacementCategory === "scene" && sceneInputMode === "reference");
+    }
+    return image.replacementCategory !== "scene" || sceneInputMode === "reference";
+  };
+
+  const getActiveBinaryReferenceCount = () => {
+    const productCount = project.productImages.filter((image) => image.url).length;
+    const characterCount = project.replacementWorkflow === "product_only" || project.modelSource !== "custom"
+      ? 0
+      : project.characterImages.slice(0, Math.max(0, Math.min(2, project.modelCount))).filter((image) => image.url).length;
+    const referenceCount = project.referenceImages.filter((image) => image.url && isReferenceActiveForCurrentWorkflow(image)).length;
+    return productCount + characterCount + referenceCount;
+  };
 
   const processFile = async (file: File, type: 'product' | 'character' | 'reference') => {
     try {
+      const activeCount = getActiveBinaryReferenceCount();
+      const replacingCharacter = type === "character" && Boolean(project.characterImages[activeUploadIndexRef.current]?.url);
+      const newReferenceWouldBeActive = type !== "reference" || isReferenceActiveForCurrentWorkflow({ replacementCategory: activeReferenceCategoryRef.current });
+      if (activeCount >= 8 && !replacingCharacter && newReferenceWouldBeActive) {
+        alert("当前工作流已使用 8/8 张有效参考图。请删除一张当前生效的图片，或切换工作流后再上传。");
+        return;
+      }
       const prepared = await prepareImageForReference(file);
       if (type === 'product') {
         const isMain = project.productImages.length === 0;
@@ -141,10 +197,18 @@ export default function SidebarParams({
           });
         }
         updatedImages[targetIndex] = newAsset;
-        onUpdateProject({ characterImages: updatedImages, modelSource: "custom", modelCount: Math.max(project.modelCount, targetIndex + 1) });
+        const binding = normalizePersonBindings(Math.max(1, project.modelCount))[targetIndex];
+        onUpdateProject({
+          characterImages: updatedImages,
+          modelSource: "custom",
+          modelCount: Math.max(project.modelCount, targetIndex + 1),
+          personBindings: binding
+            ? normalizePersonBindings(Math.max(1, project.modelCount)).map((item) => item.slotId === binding.slotId ? { ...item, characterImageId: newAsset.id } : item)
+            : project.personBindings,
+        });
       } else if (type === 'reference') {
-        if (project.referenceImages.length >= 5) {
-          alert("最多只能上传5张参考图。");
+        if (project.referenceImages.length >= 16) {
+          alert("最多只能上传16张参考图。");
           return;
         }
         const id = `ref-upload-${Date.now()}`;
@@ -154,16 +218,27 @@ export default function SidebarParams({
           id,
           name: file.name,
           url: prepared.dataUrl,
-          weight: "medium",
+          weight: project.referencePromptWeight || "medium",
           role: project.visualType === "R" ? "replacement_reference" : "style_reference",
           replacementCategory: project.visualType === "R" ? activeReferenceCategoryRef.current : undefined,
+          personSlotId: project.visualType === "R" ? activePersonSlotRef.current : undefined,
           mimeType: prepared.mimeType,
           width: prepared.width,
           height: prepared.height,
           originalBytes: prepared.originalBytes,
           storageKey,
         };
-        onUpdateProject({ referenceImages: [...project.referenceImages, newAsset] });
+        const bindingField = activeReferenceCategoryRef.current === "upper_garment"
+          ? "upperGarmentImageId"
+          : activeReferenceCategoryRef.current === "lower_garment"
+            ? "lowerGarmentImageId"
+            : undefined;
+        onUpdateProject({
+          referenceImages: [...project.referenceImages, newAsset],
+          personBindings: bindingField && activePersonSlotRef.current
+            ? normalizePersonBindings(Math.max(1, project.modelCount)).map((binding) => binding.slotId === activePersonSlotRef.current ? { ...binding, [bindingField]: newAsset.id } : binding)
+            : project.personBindings,
+        });
       }
     } catch (error) {
       alert(error instanceof Error ? error.message : `${type}图处理失败。`);
@@ -202,7 +277,13 @@ export default function SidebarParams({
         updatedImages.pop();
       }
       
-      onUpdateProject({ characterImages: updatedImages });
+      const targetBinding = (project.personBindings || [])[index];
+      onUpdateProject({
+        characterImages: updatedImages,
+        personBindings: targetBinding
+          ? (project.personBindings || []).map((binding) => binding.slotId === targetBinding.slotId ? { ...binding, characterImageId: undefined } : binding)
+          : project.personBindings,
+      });
     }
   };
 
@@ -253,7 +334,6 @@ export default function SidebarParams({
   };
 
   const sceneOptions = getSceneOptions(project.visualType);
-  const modelSource = project.modelSource || (project.modelCount === 0 ? "none" : project.characterImages.some((image) => image.url) ? "custom" : "default");
   const replacementWorkflow = project.replacementWorkflow || "multi_replace";
   const hasReferenceCategory = (category: ReplacementReferenceCategory) => project.referenceImages.some((image) => image.replacementCategory === category);
   const replacementWorkflowReady = replacementWorkflow === "pose_rebuild"
@@ -267,11 +347,15 @@ export default function SidebarParams({
     characterImages: project.characterImages,
     modelCount: project.modelCount,
     modelSource: project.modelSource,
+    multiPersonMode: project.multiPersonMode,
+    personBindings: project.personBindings,
     referenceImages: project.referenceImages,
+    referencePromptWeight: project.referencePromptWeight,
     visualType: project.visualType,
     replacementMode: project.replacementMode,
     replacementWorkflow: project.replacementWorkflow,
     scene: project.scene,
+    sceneSource: project.sceneSource,
     productFunctions: project.productFunctions,
     shotScale: project.shotScale,
     cameraAngle: project.cameraAngle,
@@ -282,8 +366,9 @@ export default function SidebarParams({
   const createEmptyWorkspace = (mode: "creative" | "replacement"): ModeWorkspace => {
     const visualType: VisualTypeId = mode === "replacement" ? "R" : "A";
     return {
-      productImages: [], characterImages: [], modelCount: 1, modelSource: "default", referenceImages: [],
+      productImages: [], characterImages: [], modelCount: 1, modelSource: "default", multiPersonMode: false, personBindings: [], referenceImages: [], referencePromptWeight: "medium",
       visualType, replacementMode: "服装+场景替换", replacementWorkflow: "multi_replace", scene: getDefaultScene(visualType), productFunctions: [],
+      sceneSource: "preset",
       shotScale: "中景", cameraAngle: "平视", originalPrompt: "", keepCharacter: true,
     };
   };
@@ -301,20 +386,20 @@ export default function SidebarParams({
     });
   };
 
-  const openReplacementUpload = (category: ReplacementReferenceCategory) => {
+  const openReplacementUpload = (category: ReplacementReferenceCategory, personSlotId?: string) => {
     activeReferenceCategoryRef.current = category;
+    activePersonSlotRef.current = personSlotId;
     if (category === "scene") {
-      setSceneInputMode("reference");
-      onUpdateProject({ replacementMode: "服装+场景替换" });
+      onUpdateProject({ replacementMode: "服装+场景替换", sceneSource: "reference" });
     }
     if (category === "upper_garment" || category === "lower_garment") {
       onUpdateProject({ replacementMode: "服装替换" });
     }
-    referenceInputRef.current?.click();
+    replacementReferenceInputRef.current?.click();
   };
 
   const replacementUploadCard = (category: ReplacementReferenceCategory, label: string, hint: string, embedded = false) => {
-    const images = project.referenceImages.filter((image) => image.replacementCategory === category);
+    const images = project.referenceImages.filter((image) => image.replacementCategory === category && !image.personSlotId);
     return (
       <div className={`${embedded ? "bg-transparent p-2" : "rounded-xl border border-slate-200 bg-white p-3"} space-y-2`}>
         <div className="flex items-start justify-between gap-2">
@@ -332,6 +417,34 @@ export default function SidebarParams({
         </div>
       </div>
     );
+  };
+
+  const personSlotImageControl = (binding: PersonBinding, index: number, type: "character" | "upper_garment" | "lower_garment", label: string) => {
+    const image = type === "character"
+      ? project.characterImages.find((item) => item.id === binding.characterImageId) || project.characterImages[index]
+      : project.referenceImages.find((item) => item.id === (type === "upper_garment" ? binding.upperGarmentImageId : binding.lowerGarmentImageId));
+    const removeImage = () => {
+      if (!image) return;
+      void deleteImageData(image.storageKey);
+      if (type === "character") {
+        handleDeleteCharacter(index);
+      } else {
+        const field = type === "upper_garment" ? "upperGarmentImageId" : "lowerGarmentImageId";
+        onUpdateProject({
+          referenceImages: project.referenceImages.filter((item) => item.id !== image.id),
+          personBindings: (project.personBindings || []).map((item) => item.slotId === binding.slotId ? { ...item, [field]: undefined } : item),
+        });
+      }
+    };
+    const upload = () => {
+      if (type === "character") {
+        activeUploadIndexRef.current = index;
+        replacementCharacterInputRef.current?.click();
+      } else {
+        openReplacementUpload(type, binding.slotId);
+      }
+    };
+    return <div className="space-y-1"><span className="text-[8px] font-semibold text-slate-500">{label}</span>{image?.url ? <div className="relative h-12 overflow-hidden rounded-lg border border-amber-100 bg-slate-50"><img src={image.url} alt={`${binding.label}${label}`} className="h-full w-full object-cover" /><button type="button" onClick={removeImage} className="absolute right-1 top-1 rounded-full bg-black/60 p-0.5 text-white" aria-label={`删除${binding.label}${label}`}><X className="h-3 w-3" /></button></div> : <button type="button" onClick={upload} className="flex h-12 w-full items-center justify-center gap-1 rounded-lg border border-dashed border-amber-200 bg-amber-50/40 text-[8px] font-semibold text-amber-700"><Upload className="h-3 w-3" />上传</button>}</div>;
   };
 
   return (
@@ -359,7 +472,7 @@ export default function SidebarParams({
                   { id: "product_only", index: "02", label: "原图单品替换", description: "保持原场景与人物不变，只替换产品" },
                   { id: "multi_replace", index: "03", label: "多要素精确替换", description: "分别控制人物、服装、动作、构图和场景" },
                 ] as const).map((workflow) => (
-                  <button key={workflow.id} type="button" onClick={() => onUpdateProject({ replacementWorkflow: workflow.id, replacementMode: workflow.id === "product_only" ? "产品替换" : workflow.id === "pose_rebuild" ? "服装+场景替换" : project.replacementMode, ...(workflow.id === "pose_rebuild" ? { modelSource: "custom" as const, modelCount: Math.max(1, project.modelCount) } : workflow.id === "product_only" ? { modelSource: "default" as const, modelCount: 1 } : {}) })} className={`w-full rounded-xl border p-3 text-left transition ${replacementWorkflow === workflow.id ? "border-blue-500 bg-blue-50 shadow-sm" : "border-slate-200 bg-white hover:border-blue-200"}`}>
+                  <button key={workflow.id} type="button" onClick={() => onUpdateProject({ replacementWorkflow: workflow.id, replacementMode: workflow.id === "product_only" ? "产品替换" : workflow.id === "pose_rebuild" ? "服装+场景替换" : project.replacementMode, ...(workflow.id === "pose_rebuild" ? { modelSource: "custom" as const, modelCount: Math.max(1, project.modelCount) } : workflow.id === "product_only" ? { modelSource: "default" as const, modelCount: 1, multiPersonMode: false, personBindings: [] } : {}) })} className={`w-full rounded-xl border p-3 text-left transition ${replacementWorkflow === workflow.id ? "border-blue-500 bg-blue-50 shadow-sm" : "border-slate-200 bg-white hover:border-blue-200"}`}>
                     <span className="flex items-start gap-2"><span className={`mt-0.5 text-[9px] font-mono font-bold ${replacementWorkflow === workflow.id ? "text-blue-600" : "text-slate-400"}`}>{workflow.index}</span><span><span className="block text-[11px] font-bold text-slate-800">{workflow.label}</span><span className="mt-0.5 block text-[9px] leading-relaxed text-slate-400">{workflow.description}</span></span></span>
                   </button>
                 ))}
@@ -392,7 +505,7 @@ export default function SidebarParams({
                     </button>
                   </div>
                 ))}
-                <button type="button" onClick={() => productInputRef.current?.click()} className="aspect-square rounded-lg border border-dashed border-blue-200 bg-white text-blue-500 flex flex-col items-center justify-center"><Upload className="h-4 w-4" /><span className="mt-1 text-[9px]">上传产品</span></button>
+                <button type="button" onClick={() => replacementProductInputRef.current?.click()} className="aspect-square rounded-lg border border-dashed border-blue-200 bg-white text-blue-500 flex flex-col items-center justify-center"><Upload className="h-4 w-4" /><span className="mt-1 text-[9px]">上传产品</span></button>
               </div>
             </section>
 
@@ -401,8 +514,8 @@ export default function SidebarParams({
               <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-3">
                 {replacementWorkflow === "product_only" ? replacementUploadCard("scene", "上传原场景图", "原人物、构图、光影和环境均保持不变，仅替换产品", true) : <>
                 <div className="grid grid-cols-2 rounded-lg bg-slate-200/70 p-1">
-                  <button type="button" onClick={() => setSceneInputMode("preset")} className={`rounded-md py-1.5 text-[10px] font-bold ${sceneInputMode === "preset" ? "bg-white text-emerald-700 shadow-sm" : "text-slate-500"}`}>预设场景</button>
-                  <button type="button" onClick={() => setSceneInputMode("reference")} className={`rounded-md py-1.5 text-[10px] font-bold ${sceneInputMode === "reference" ? "bg-white text-emerald-700 shadow-sm" : "text-slate-500"}`}>场景参考图</button>
+                  <button type="button" onClick={() => onUpdateProject({ sceneSource: "preset" })} className={`rounded-md py-1.5 text-[10px] font-bold ${sceneInputMode === "preset" ? "bg-white text-emerald-700 shadow-sm" : "text-slate-500"}`}>预设场景</button>
+                  <button type="button" onClick={() => onUpdateProject({ sceneSource: "reference" })} className={`rounded-md py-1.5 text-[10px] font-bold ${sceneInputMode === "reference" ? "bg-white text-emerald-700 shadow-sm" : "text-slate-500"}`}>场景参考图</button>
                 </div>
                 {sceneInputMode === "preset" ? (
                   <div className="grid grid-cols-2 gap-2">{sceneOptions.map((sceneOption) => <button key={sceneOption.id} type="button" onClick={() => onUpdateProject({ scene: sceneOption.id, tone: sceneOption.recommendedTone || project.tone, replacementMode: "服装+场景替换" })} className={`rounded-lg border px-2 py-2 text-[10px] font-semibold ${project.scene === sceneOption.id ? "border-emerald-500 bg-emerald-500 text-white" : "border-slate-200 bg-white text-slate-600"}`}>{sceneOption.label}</button>)}</div>
@@ -410,38 +523,41 @@ export default function SidebarParams({
               </div>
             </section>
 
-            {replacementWorkflow === "multi_replace" && <section className="space-y-3">
-              <div className="flex items-center gap-2"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-violet-100 text-[10px] font-bold text-violet-700">2</span><h3 className="text-xs font-bold text-slate-900">服装替换</h3></div>
-              <div className="rounded-xl border border-violet-200 bg-violet-50/40 p-2">
-                <div className="grid grid-cols-2 divide-x divide-violet-100">
-                  {replacementUploadCard("upper_garment", "上身服装", "上衣、背心等", true)}
-                  {replacementUploadCard("lower_garment", "下身服装", "内裤、裤装等", true)}
-                </div>
-              </div>
-              <p className="text-[9px] leading-relaxed text-slate-400">上传任一服装参考图后，将自动按服装替换规则生成。</p>
-            </section>}
-
             {replacementWorkflow !== "product_only" && <section className="space-y-3">
-              <div className="flex items-center gap-2"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-100 text-[10px] font-bold text-amber-700">3</span><h3 className="text-xs font-bold text-slate-900">模特形象替换</h3></div>
+              <div className="flex items-center gap-2"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-100 text-[10px] font-bold text-amber-700">2</span><h3 className="text-xs font-bold text-slate-900">人物与穿搭绑定</h3></div>
               <div className="rounded-xl border border-amber-200 bg-amber-50/40 p-3 space-y-3">
-                {replacementWorkflow === "multi_replace" && <div className="grid grid-cols-3 gap-1 rounded-lg bg-amber-100/70 p-1">
-                  {([
-                    { id: "none", label: "无人" },
-                    { id: "default", label: "默认模特" },
-                    { id: "custom", label: "指定模特" },
-                  ] as const).map((option) => (
-                    <button key={option.id} type="button" onClick={() => onUpdateProject({ modelSource: option.id, modelCount: option.id === "none" ? 0 : Math.max(1, project.modelCount) })} className={`rounded-md px-1 py-2 text-[9px] font-bold transition ${modelSource === option.id ? "bg-white text-amber-800 shadow-sm" : "text-amber-700/60 hover:text-amber-800"}`}>{option.label}</button>
-                  ))}
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-gradient-to-br from-white to-amber-50/70 p-3 shadow-sm">
+                  <div className="min-w-0"><span className="block text-[10px] font-bold text-slate-800">画面人数</span><span className="mt-0.5 block text-[8px] leading-relaxed text-slate-400">自动生成对应人物槽位</span></div>
+                  <CustomSelect
+                    ariaLabel="画面人数"
+                    value={String(project.modelCount)}
+                    icon={<span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-700"><UsersRound className="h-3.5 w-3.5" /></span>}
+                    options={[
+                      { value: "0", label: "无人", description: "产品静物或场景陈列，不出现人物" },
+                      { value: "1", label: "1 人", description: "生成 1 个人物槽位" },
+                      { value: "2", label: "2 人", description: "生成 A、B 两个人物槽位" },
+                    ]}
+                    onChange={(value) => { const count = Number(value); onUpdateProject({ modelCount: count, modelSource: count === 0 ? "none" : project.characterImages.some((image) => image.url) ? "custom" : "default", multiPersonMode: count > 1, personBindings: count > 0 ? normalizePersonBindings(count) : [] }); }}
+                    className="w-[132px] shrink-0"
+                    buttonClassName="rounded-xl border border-amber-200 bg-white px-2 py-1.5 text-[10px] font-bold text-slate-800 shadow-sm"
+                    menuClassName="border-amber-100"
+                  />
+                </div>
+                {project.modelCount === 0 && <p className="rounded-lg bg-white px-3 py-2 text-[9px] leading-relaxed text-slate-500">禁止自主新增人物或人体部位；参考图已有的人体局部与动作可按原范围保留用于展示产品，参考图无人时保持纯无人摄影。</p>}
+                {project.modelCount > 0 && <div className="space-y-2 border-t border-amber-100 pt-3">
+                  <div><p className="text-[10px] font-bold text-slate-800">人物槽位绑定</p><p className="mt-0.5 text-[9px] leading-relaxed text-slate-400">每个槽位独立绑定形象、上下身穿搭、处理方式和产品，禁止跨人物串用。</p></div>
+                  {normalizePersonBindings(project.modelCount).map((binding, index) => <div key={binding.slotId} className="rounded-xl border border-amber-100 bg-white p-2.5 space-y-2">
+                    <div className="flex items-center justify-between"><span className="flex h-5 items-center rounded-full bg-amber-100 px-2 text-[9px] font-bold text-amber-800">{binding.label}</span><span className="text-[8px] text-slate-400">槽位 {String.fromCharCode(65 + index)}</span></div>
+                    {binding.operation !== "remove" && <div className="grid grid-cols-3 gap-2">{personSlotImageControl(binding, index, "character", "形象图")}{personSlotImageControl(binding, index, "upper_garment", "上身穿搭")}{personSlotImageControl(binding, index, "lower_garment", "下身穿搭")}</div>}
+                    <div className={`grid gap-2 ${project.replacementWorkflow === "pose_rebuild" ? "grid-cols-1" : "grid-cols-2"}`}>
+                      {project.replacementWorkflow !== "pose_rebuild" && <label className="space-y-1"><span className="text-[8px] font-semibold text-slate-500">原图位置</span><select value={binding.sourcePosition} onChange={(event) => updatePersonBinding(binding.slotId, { sourcePosition: event.target.value as PersonBinding["sourcePosition"] })} className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-[9px] text-slate-700"><option value="left">画面左侧</option><option value="center">画面中央</option><option value="right">画面右侧</option><option value="front">前景</option><option value="back">后景</option></select></label>}
+                      <div className="space-y-1"><span className="text-[8px] font-semibold text-slate-500">处理方式</span><CustomSelect compact ariaLabel={`${binding.label}处理方式`} value={binding.operation} options={project.replacementWorkflow === "pose_rebuild" ? [{ value: "keep", label: "锁姿势·换形象", description: "保留姿势位置，替换为绑定人物" }, { value: "replace_product", label: "锁姿势·换形象/产品", description: "同时替换绑定人物和产品" }, { value: "replace_all", label: "锁姿势·全部替换", description: "替换人物、穿搭与产品" }, { value: "remove", label: "删除人物", description: "移除人物并自然补全背景" }] : [{ value: "keep", label: "保持不变", description: "保留该人物与穿搭" }, { value: "replace_product", label: "仅换产品", description: "人物形象与穿搭保持不变" }, { value: "replace_all", label: "人物/服装/产品替换", description: "按本槽位上传素材完整替换" }, { value: "remove", label: "删除人物", description: "移除人物并自然补全背景" }]} onChange={(value) => updatePersonBinding(binding.slotId, { operation: value as PersonBinding["operation"] })} buttonClassName="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-[9px] font-semibold text-slate-700" /></div>
+                    </div>
+                    {binding.operation !== "remove" && <div className="grid grid-cols-1 gap-2">
+                      <div className="space-y-1"><div className="flex items-center justify-between"><span className="text-[8px] font-semibold text-slate-500">绑定产品</span><span className="text-[8px] text-slate-400">来源：顶部产品图</span></div><CustomSelect compact ariaLabel={`${binding.label}绑定产品`} value={binding.productImageId || project.productImages[0]?.id || ""} options={project.productImages.length ? project.productImages.map((image, imageIndex) => ({ value: image.id, label: `产品 ${imageIndex + 1}${image.isMain ? " · 主图" : " · 补充图"}`, description: image.name })) : [{ value: "", label: "暂无产品", description: "请先在顶部产品图板块上传" }]} onChange={(value) => updatePersonBinding(binding.slotId, { productImageId: value || undefined })} buttonClassName="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[9px] font-semibold text-slate-700" /></div>
+                    </div>}
+                  </div>)}
                 </div>}
-                {modelSource === "none" && <p className="rounded-lg bg-white px-3 py-2 text-[9px] leading-relaxed text-slate-500">生成严格无人画面，不出现人物、手、脸、人体局部、人物倒影或人形模特。</p>}
-                {modelSource === "default" && <p className="rounded-lg bg-white px-3 py-2 text-[9px] leading-relaxed text-slate-500">不携带人物参考图，使用巴迪高默认成年亚洲模特规范。</p>}
-                {modelSource === "custom" && <>
-                  <div className="flex items-start justify-between"><div><p className="text-[11px] font-bold text-slate-800">模特形象图</p><p className="mt-0.5 text-[9px] text-slate-400">锁定成年模特的面部、发型与人物身份</p></div><span className="rounded-full bg-white px-2 py-0.5 text-[9px] text-amber-700">{project.characterImages.filter((image) => image.url).length} 张</span></div>
-                  <div className="grid grid-cols-4 gap-2">
-                    {project.characterImages.filter((image) => image.url).map((image, index) => <div key={image.id} className="relative aspect-square overflow-hidden rounded-lg border border-amber-200"><img src={image.url} alt="模特形象" className="h-full w-full object-cover" /><button type="button" onClick={() => handleDeleteCharacter(index)} className="absolute right-1 top-1 rounded-full bg-black/60 p-0.5 text-white"><X className="h-3 w-3" /></button></div>)}
-                    <button type="button" onClick={() => { activeUploadIndexRef.current = project.characterImages.filter((image) => image.url).length; if (project.modelCount <= activeUploadIndexRef.current) onUpdateProject({ modelCount: activeUploadIndexRef.current + 1, modelSource: "custom" }); characterInputRef.current?.click(); }} className="aspect-square rounded-lg border border-dashed border-amber-300 bg-white text-amber-600 flex flex-col items-center justify-center"><Upload className="h-4 w-4" /><span className="mt-1 text-[9px]">上传模特</span></button>
-                  </div>
-                </>}
               </div>
             </section>}
 
@@ -451,9 +567,9 @@ export default function SidebarParams({
               {replacementUploadCard("action", "动作参考图", "锁定人物姿势、肢体角度和动作状态")}
             </section>}
 
-            <input type="file" ref={productInputRef} onChange={handleProductUpload} accept="image/*" className="hidden" />
-            <input type="file" ref={characterInputRef} onChange={handleCharacterUpload} accept="image/*" className="hidden" />
-            <input type="file" ref={referenceInputRef} onChange={handleReferenceUpload} accept="image/*" className="hidden" />
+            <input type="file" ref={replacementProductInputRef} onChange={handleProductUpload} accept="image/*" className="hidden" />
+            <input type="file" ref={replacementCharacterInputRef} onChange={handleCharacterUpload} accept="image/*" className="hidden" />
+            <input type="file" ref={replacementReferenceInputRef} onChange={handleReferenceUpload} accept="image/*" className="hidden" />
           </div>
         )}
         
@@ -517,14 +633,14 @@ export default function SidebarParams({
                   
                   {/* Upload button */}
                   <button
-                    onClick={() => productInputRef.current?.click()}
+                    onClick={() => creativeProductInputRef.current?.click()}
                     onPaste={(e) => handlePaste(e, 'product')}
                     className="aspect-square border border-dashed border-gray-200 hover:border-blue-500 rounded-lg flex flex-col items-center justify-center bg-gray-50 text-gray-400 hover:text-blue-500 transition"
                   >
                     <Upload className="w-4 h-4" />
                     <span className="text-[9px] mt-1">本地上传</span>
                   </button>
-                  <input type="file" ref={productInputRef} onChange={handleProductUpload} accept="image/*" className="hidden" />
+                  <input type="file" ref={creativeProductInputRef} onChange={handleProductUpload} accept="image/*" className="hidden" />
                 </div>
 
 
@@ -543,7 +659,7 @@ export default function SidebarParams({
                       className="w-[70px]"
                       buttonClassName="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-semibold text-slate-700"
                       menuClassName="min-w-[110px]"
-                      options={[0, 1, 2, 3, 4].map((count) => ({ value: String(count), label: `${count} 人` }))}
+                      options={[0, 1, 2].map((count) => ({ value: String(count), label: `${count} 人` }))}
                     />
                   </div>
                 </div>
@@ -584,7 +700,7 @@ export default function SidebarParams({
                           key={`empty-${index}`}
                           onClick={() => {
                             activeUploadIndexRef.current = index;
-                            characterInputRef.current?.click();
+                            creativeCharacterInputRef.current?.click();
                           }}
                           onPaste={(e) => {
                             activeUploadIndexRef.current = index;
@@ -599,7 +715,7 @@ export default function SidebarParams({
                       );
                     }
                   })}
-                  <input type="file" ref={characterInputRef} onChange={handleCharacterUpload} accept="image/*" className="hidden" />
+                  <input type="file" ref={creativeCharacterInputRef} onChange={handleCharacterUpload} accept="image/*" className="hidden" />
                 </div>}
 
 
@@ -612,7 +728,29 @@ export default function SidebarParams({
                     {project.visualType === "R" ? "替换参考图" : "参考风格图"}
                     <span className="text-gray-400 font-normal">({project.visualType === "R" ? "必填" : "选填"}, 最多5张)</span>
                   </span>
-                  <span className="text-[10px] text-gray-400">{project.visualType === "R" ? "精确复刻姿势、动作、视角、构图" : "控制光影、构图与影调"}</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="hidden text-[9px] text-gray-400 xl:inline">{project.visualType === "R" ? "精确复刻" : "整体权重"}</span>
+                    <CustomSelect
+                      compact
+                      ariaLabel="参考图整体权重"
+                      value={project.referencePromptWeight || "medium"}
+                      onChange={(value) => {
+                        const weight = value as ReferenceImage["weight"];
+                        onUpdateProject({
+                          referencePromptWeight: weight,
+                          referenceImages: project.referenceImages.map((image) => ({ ...image, weight })),
+                        });
+                      }}
+                      className="w-[72px] shrink-0"
+                      buttonClassName="h-6 rounded-lg border border-slate-200 bg-white px-2 text-[9px] font-semibold text-slate-600 shadow-sm"
+                      menuClassName="min-w-[92px]"
+                      options={[
+                        { value: "low", label: "低", description: "轻度参考" },
+                        { value: "medium", label: "中", description: "明显参考" },
+                        { value: "high", label: "高", description: "强参考" },
+                      ]}
+                    />
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-4 gap-2">
@@ -658,7 +796,7 @@ export default function SidebarParams({
 
                   {project.referenceImages.length < 5 && (
                     <button
-                      onClick={() => referenceInputRef.current?.click()}
+                      onClick={() => creativeReferenceInputRef.current?.click()}
                       onPaste={(e) => handlePaste(e, 'reference')}
                       className="aspect-square border border-dashed border-gray-200 hover:border-blue-500 rounded-lg flex flex-col items-center justify-center bg-gray-50 text-gray-400 hover:text-blue-500 transition"
                     >
@@ -666,7 +804,7 @@ export default function SidebarParams({
                       <span className="text-[9px] mt-1">上传参考</span>
                     </button>
                   )}
-                  <input type="file" ref={referenceInputRef} onChange={handleReferenceUpload} accept="image/*" className="hidden" />
+                  <input type="file" ref={creativeReferenceInputRef} onChange={handleReferenceUpload} accept="image/*" className="hidden" />
                 </div>
 
 
@@ -1018,6 +1156,12 @@ export default function SidebarParams({
                   rows={9}
                   className="w-full rounded-xl border border-slate-200 bg-white p-3 font-mono text-[10px] leading-relaxed text-slate-600 resize-y focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                 />
+                {promptStructureWarnings.length > 0 && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-2 text-[9px] leading-relaxed text-amber-800">
+                    <p className="font-bold">提示词结构审计</p>
+                    {promptStructureWarnings.map((warning, index) => <p key={`${warning}-${index}`}>· {warning}</p>)}
+                  </div>
+                )}
                 <button
                   type="button"
                   disabled={!actualPromptPreviewEnglish || isPromptPreviewLoading}

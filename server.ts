@@ -11,6 +11,7 @@ import {
   type AssetAnalysis,
   compilePrompt,
   type ImageReferenceRole,
+  type ReplacementReferenceCategory,
   type PromptImageInput,
   PROMPT_REFINER_SYSTEM_INSTRUCTION,
   type PromptCompileInput,
@@ -23,6 +24,7 @@ dotenv.config();
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const MAX_REFERENCE_IMAGES = 8;
+const MAX_SUBMITTED_IMAGES = 24;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
 app.use(express.json({ limit: "50mb" }));
@@ -51,11 +53,33 @@ function normalizePromptInput(body: Record<string, unknown>): PromptCompileInput
   const replacementMode = (["服装+场景替换", "产品替换", "服装替换"].includes(String(body.replacementMode))
     ? String(body.replacementMode)
     : "服装+场景替换") as PromptCompileInput["replacementMode"];
+  const replacementWorkflow = body.replacementWorkflow === "pose_rebuild" || body.replacementWorkflow === "product_only" || body.replacementWorkflow === "multi_replace" ? body.replacementWorkflow : "multi_replace";
+  const rawReferenceImages = Array.isArray(body.referenceImages) ? body.referenceImages.map(String).filter(Boolean) : [];
+  const referenceImages = visualType !== "R" || replacementWorkflow === "multi_replace"
+    ? rawReferenceImages
+    : replacementWorkflow === "product_only"
+      ? rawReferenceImages.filter((name) => name.includes("[base_image]") || name.includes("[scene]")).slice(0, 1).map((name) => name.replace("[scene]", "[base_image]"))
+      : rawReferenceImages.filter((name) => name.includes("[action]") || name.includes("[scene]"));
+  const rawReferenceWeights = Array.isArray(body.referenceImageWeights)
+    ? body.referenceImageWeights.map((item) => {
+        const entry = (item || {}) as Record<string, unknown>;
+        const weight = ["low", "medium", "high"].includes(String(entry.weight))
+          ? String(entry.weight) as "low" | "medium" | "high"
+          : "medium";
+        return { name: String(entry.name || "Style reference"), weight };
+      })
+    : [];
+  const referenceImageWeights = referenceImages.map((name) => {
+    const sourceName = name.replace("[base_image]", "[scene]");
+    const match = rawReferenceWeights.find((item) => item.name === name || item.name === sourceName);
+    return { name, weight: replacementWorkflow === "product_only" ? "high" as const : match?.weight || "medium" as const };
+  });
 
   return {
     visualType,
     replacementMode,
-    replacementWorkflow: body.replacementWorkflow === "pose_rebuild" || body.replacementWorkflow === "product_only" || body.replacementWorkflow === "multi_replace" ? body.replacementWorkflow : "multi_replace",
+    replacementWorkflow,
+    sceneSource: body.sceneSource === "reference" ? "reference" : "preset",
     scene: typeof body.scene === "string" ? body.scene : undefined,
     productFunctions: Array.isArray(body.productFunctions) ? body.productFunctions.map(String) : [],
     shotScale: typeof body.shotScale === "string" ? body.shotScale : "中景",
@@ -65,19 +89,27 @@ function normalizePromptInput(body: Record<string, unknown>): PromptCompileInput
     resolution: typeof body.resolution === "string" ? body.resolution : "2K",
     aspectRatio: typeof body.aspectRatio === "string" ? body.aspectRatio : "3:4",
     imageCount: Number.isFinite(Number(body.imageCount)) ? Number(body.imageCount) : 4,
-    modelCount: Number.isFinite(Number(body.modelCount)) ? Math.max(0, Math.min(4, Number(body.modelCount))) : 1,
-    productImages: Array.isArray(body.productImages) ? body.productImages.map(String).filter(Boolean) : [],
-    characterImages: Array.isArray(body.characterImages) ? body.characterImages.map(String).filter(Boolean) : [],
-    referenceImages: Array.isArray(body.referenceImages) ? body.referenceImages.map(String).filter(Boolean) : [],
-    referenceImageWeights: Array.isArray(body.referenceImageWeights)
-      ? body.referenceImageWeights.map((item) => {
-          const entry = (item || {}) as Record<string, unknown>;
-          const weight = ["low", "medium", "high"].includes(String(entry.weight))
-            ? String(entry.weight) as "low" | "medium" | "high"
-            : "medium";
-          return { name: String(entry.name || "Style reference"), weight };
+    modelCount: Number.isFinite(Number(body.modelCount)) ? Math.max(0, Math.min(2, Number(body.modelCount))) : 1,
+    multiPersonMode: replacementWorkflow !== "product_only" && body.multiPersonMode === true,
+    personBindings: replacementWorkflow !== "product_only" && Array.isArray(body.personBindings)
+      ? body.personBindings.slice(0, 2).map((item) => {
+          const binding = (item || {}) as Record<string, unknown>;
+          return {
+            slotId: String(binding.slotId || ""),
+            label: String(binding.label || ""),
+            sourcePosition: String(binding.sourcePosition || ""),
+            operation: String(binding.operation || ""),
+            characterImage: typeof binding.characterImage === "string" ? binding.characterImage : undefined,
+            productImage: typeof binding.productImage === "string" ? binding.productImage : undefined,
+            upperGarmentImage: typeof binding.upperGarmentImage === "string" ? binding.upperGarmentImage : undefined,
+            lowerGarmentImage: typeof binding.lowerGarmentImage === "string" ? binding.lowerGarmentImage : undefined,
+          };
         })
       : [],
+    productImages: Array.isArray(body.productImages) ? body.productImages.map(String).filter(Boolean) : [],
+    characterImages: replacementWorkflow === "product_only" ? [] : Array.isArray(body.characterImages) ? body.characterImages.map(String).filter(Boolean) : [],
+    referenceImages,
+    referenceImageWeights,
     imageAnalyses: Array.isArray(body.imageAnalyses) ? (body.imageAnalyses as AssetAnalysis[]) : [],
   };
 }
@@ -187,34 +219,118 @@ function normalizeGeminiImageResolution(resolution: string) {
 const GEMINI_REFERENCE_BOUNDARY = `
 [REFERENCE ROLE BOUNDARY — MANDATORY]
 Every uploaded image has one and only one role. Never merge roles between images.
-- REPLACEMENT REFERENCE: reproduce pose, action, camera viewpoint, shot scale, crop, reference aspect ratio, subject placement, negative space, and composition exactly. Do not inherit person identity, face, body traits, garment design, lighting, color temperature, brightness hierarchy, or tonal mood from this image.
-- STYLE REFERENCE: may influence photographic style, pose, action, crop, camera placement, background, furniture, props, architecture, object placement, and composition. Do not reproduce its subject, character identity, face, body, or garment design.
+- [action] REPLACEMENT REFERENCE: use only pose, limb angles, center of gravity, hand/foot positions, head direction, and action. Ignore its background, environment, props, composition, crop, camera, lighting, palette, identity, and clothing.
+- [composition] REPLACEMENT REFERENCE: use only camera viewpoint, shot scale, crop, aspect ratio, subject placement/ratio, negative space, horizon, perspective, and spatial layout. Ignore its background identity, environment type, props, lighting, palette, person identity, and clothing.
+- [scene] REPLACEMENT REFERENCE: use only environment, location objects, lighting, palette, atmosphere, and scene depth. It must not control person identity, pose, garment design, product design, or camera when a composition reference exists.
+- [upper_garment]/[lower_garment] REPLACEMENT REFERENCE: use only garment category, wearing position, coverage, layering, and fit. Ignore background, scene, camera, pose, identity, and lighting.
+- [base_image] IMMUTABLE BASE IMAGE: preserve every non-target pixel, person identity, face, hair, body, pose, garment occlusion, composition, scene, props, camera, lighting, and spatial relationship. Detect and remove only the original target product, then replace it completely with PRODUCT MASTER. Never retain or blend the old product design.
+- When no [scene] image is uploaded, the selected PRESET SCENE is the exclusive source of environment, background objects, lighting, palette, and atmosphere. Action and composition images are forbidden from supplying any scene content.
+- CREATIVE BASE / STYLE REFERENCE: use as an overall creative template for a similar product image. It may guide visual language, scene, lighting, palette, composition, camera, crop, subject placement, existing people, face/body presentation, pose, action, and relationships. A dedicated CHARACTER IDENTITY image overrides its person identity. Never carry over the reference product or garment design; PRODUCT MASTER exclusively controls the final product silhouette, color, texture, pattern, seams, branding, and construction.
 - CHARACTER + GARMENT REFERENCE: preserve adult identity, facial features, hairstyle, and body proportions; also reference clothing placement, styling relationship, overall silhouette, coverage, natural folds, and pose-to-garment fit. Product design details must still come from PRODUCT MASTER/DETAIL.
-- CHARACTER IDENTITY: preserve only the adult person's identity, facial features, hairstyle, and body proportions. Do not copy clothing, pose, crop, background, lighting, or scene objects.
+- CHARACTER IDENTITY: preserve only the adult person's identity, facial geometry, facial landmarks, hairstyle, skin appearance, and body proportions. Do not copy clothing, pose, crop, background, lighting, or scene objects. When marked [identity-lock], it is the highest and exclusive identity authority: fully replace the person identity visible in [action] or [composition] references; never blend identities.
 - PRODUCT MASTER/DETAIL: preserve only the product's design, construction, color, texture, seams, proportions, and visible brand structure. Do not copy the source background, body pose, crop, or surrounding objects.
 The requested scene and camera settings must create a commercially usable photograph while respecting every reference role boundary.
 `;
 
-const GEMINI_FINAL_COMPLIANCE = "FINAL COMPLIANCE CHECK: In replacement mode, reproduce the replacement reference pose, action, camera viewpoint, shot scale, crop, aspect ratio, subject placement, negative space, and composition exactly. Do not inherit its person identity, face, body traits, garment design, lighting, color temperature, brightness hierarchy, or tonal mood. Person appearance comes from the character reference or brand standard; product design comes from product master; lighting and tone come from the selected scene and UI settings.";
+const GEMINI_FINAL_COMPLIANCE = "FINAL COMPLIANCE CHECK: Obey every category tag literally. If a [base_image] is present, preserve it exactly except for the old target product: remove the old product completely and replace it with PRODUCT MASTER; the product master overrides every old product pixel, color, silhouette, texture, pattern, seam, and construction detail. Do not regenerate unrelated regions. Otherwise, [action] controls pose only; [composition] controls camera and layout only; [scene] controls environment only. If no [scene] reference exists, the selected preset scene exclusively controls environment, background objects, lighting, palette, and atmosphere. Never copy background or scene content from [action] or [composition]. If an [identity-lock] character reference is present, exact identity transfer is mandatory: it is the highest and exclusive identity authority, and any person identity in [action], [composition], or other references must be discarded rather than blended. In creative mode, a HIGH-WEIGHT CREATIVE BASE / STYLE REFERENCE is a mandatory subject-and-composition skeleton: preserve its existing human presence and count, relationships, pose/action, crop, camera, subject scale, major props, product placement, background organization, lighting, and color as closely as the output aspect ratio allows. Never collapse a people-containing creative base into an isolated product still life. Without a dedicated character identity image, preserve the creative base's existing people and subject presentation; otherwise the dedicated character reference overrides identity only. Product design always comes exclusively from PRODUCT MASTER.";
 const GEMINI_SAFE_COMMERCIAL_FRAMING = "Depict clearly adult professional models only. Present the apparel in a neutral, non-sexualized commercial catalog and brand-campaign context, with natural posture and product-focused framing.";
-const GEMINI_NO_PEOPLE_FRAMING = "Create a strictly people-free commercial product photograph. Do not depict any person, model, face, hand, skin, body part, human reflection, or human-shaped mannequin. Use only the product, scene, styling surfaces, props, lighting, and abstract photographic direction.";
-type GeminiReferenceMetadata = Pick<PromptImageInput, "name" | "role" | "weight">;
+const GEMINI_NO_PEOPLE_FRAMING = "People count is set to zero, meaning DO NOT AUTONOMOUSLY ADD any new person, face, hand, body part, human reflection, or mannequin. If an active reference already contains a person or body part, preserve only its existing presence, count, crop, pose, action, occlusion, and product-contact relationship as a product-display carrier; never invent, complete, expand, duplicate, or reveal additional human anatomy beyond the reference. If no active reference contains human content, use a fully people-free still-life, flat-lay, hanging, installation, or environmental product display. Keep the treatment neutral, non-sexualized, and product-focused.";
+type GeminiReferenceMetadata = Pick<PromptImageInput, "name" | "role" | "weight" | "referenceCategory">;
+
+const REFERENCE_CATEGORIES = new Set<ReplacementReferenceCategory>([
+  "base_image", "scene", "upper_garment", "lower_garment", "composition", "action",
+]);
+
+function inferReferenceCategory(asset: GeminiReferenceMetadata): ReplacementReferenceCategory | undefined {
+  if (asset.referenceCategory) return asset.referenceCategory;
+  return (["base_image", "scene", "upper_garment", "lower_garment", "composition", "action"] as const)
+    .find((category) => asset.name.includes(`[${category}]`));
+}
+
+function auditPromptStructure(input: PromptCompileInput, assets: GeminiReferenceMetadata[]) {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const productMasters = assets.filter((asset) => asset.role === "product_master");
+  if (assets.length > MAX_REFERENCE_IMAGES) errors.push(`当前工作流共有 ${assets.length} 张有效参考图，超过模型 ${MAX_REFERENCE_IMAGES} 张上限。`);
+  if (productMasters.length !== 1) errors.push(productMasters.length === 0 ? "缺少产品主图（product_master）。" : "产品主图只能有一张。");
+  assets.forEach((asset, index) => {
+    if (!asset.weight) errors.push(`参考图 ${index + 1}（${asset.name}）未明确权重。`);
+    if (asset.role === "replacement_reference") {
+      const category = inferReferenceCategory(asset);
+      if (!category) errors.push(`替换参考图 ${index + 1} 未挂载 action/composition/scene 等结构化类别。`);
+      if (asset.referenceCategory && !asset.name.includes(`[${asset.referenceCategory}]`)) {
+        errors.push(`参考图 ${index + 1} 的类别字段为 ${asset.referenceCategory}，但提示词名称未挂载对应标签。`);
+      }
+    }
+  });
+  if (input.visualType === "R") {
+    const replacementAssets = assets.filter((asset) => asset.role === "replacement_reference");
+    const categories = replacementAssets.map(inferReferenceCategory).filter(Boolean);
+    const categoryKeys = replacementAssets.map((asset) => {
+      const category = inferReferenceCategory(asset);
+      const personSlot = /\[person-([A-B])\]/.exec(asset.name)?.[1];
+      return category === "upper_garment" || category === "lower_garment"
+        ? `${category}:${personSlot || "unbound"}`
+        : category;
+    }).filter(Boolean);
+    if (new Set(categoryKeys).size !== categoryKeys.length) errors.push("同一职责与人物槽位上传了多张参考图，来源权重不唯一。");
+    if (input.replacementWorkflow === "product_only" && !categories.includes("base_image")) errors.push("原图单品替换缺少 [base_image]。");
+    if (input.replacementWorkflow === "pose_rebuild" && !categories.includes("action")) errors.push("姿势锁定重构缺少 [action]。");
+    if (input.replacementWorkflow === "multi_replace" && !categories.includes("composition")) errors.push("多要素精确替换缺少 [composition]。");
+    if (input.replacementWorkflow !== "product_only" && !categories.includes("scene")) {
+      warnings.push(`未上传 [scene]；环境唯一来源为预设场景「${input.scene || "未选择"}」，[action] 与 [composition] 不得提供环境。`);
+    }
+  }
+  return { errors, warnings };
+}
+
+function enforcePromptStructure(input: PromptCompileInput, assets: GeminiReferenceMetadata[]) {
+  const audit = auditPromptStructure(input, assets);
+  if (audit.errors.length) throw new Error(`提示词结构校验失败：${audit.errors.join("；")}`);
+  return audit;
+}
 
 function getGeminiReferenceInstruction(asset: GeminiReferenceMetadata, index: number) {
   const weight = asset.weight || "medium";
   const weightRules = {
-    low: "LOW style intensity: use only a faint secondary cue.",
-    medium: "MEDIUM style intensity: make the referenced visual direction noticeable while respecting the restricted content boundary.",
-    high: "HIGH style intensity: strongly apply the referenced visual direction; high weight never permits copying the subject, character identity, face, body, or garment design.",
+    low: "LOW creative-template intensity: use only a faint secondary cue; scene and UI camera settings may lead.",
+    medium: "MEDIUM creative-template intensity: make the referenced visual direction, subject arrangement, and composition clearly recognizable while allowing moderate adaptation.",
+    high: "HIGH creative-template intensity — MANDATORY SUBJECT AND COMPOSITION SKELETON LOCK. Preserve the reference's existing person count, human presence, relative positions, pose/action, interaction, gaze relationship, crop logic, camera direction, subject scale, major props, product placement, negative space, background organization, lighting direction, and color relationship as closely as the requested output aspect ratio allows. Do not collapse a people-containing reference into an isolated product still life. The main semantic change must be replacement of the reference product/garment with PRODUCT MASTER; dedicated CHARACTER IDENTITY still overrides reference identity when present.",
   } as const;
 
+  const referenceCategory = inferReferenceCategory(asset);
+  const replacementRule = referenceCategory === "base_image"
+    ? "ROLE = IMMUTABLE BASE IMAGE FOR PRODUCT-ONLY REPLACEMENT. Preserve every non-target pixel and all people, faces, bodies, poses, garments, composition, scene, props, camera, lighting, shadows, and spatial relationships. Identify the old target product region, erase the old product completely, and replace it with PRODUCT MASTER at matching scale, perspective, occlusion, contact shadow, and ambient light. The PRODUCT MASTER has absolute authority over the replacement region. Never keep, blend, recolor, or merely retouch the old product."
+    : referenceCategory === "action"
+    ? "ROLE = ACTION / POSE ONLY. Reproduce only pose, limb angles, center of gravity, hand and foot positions, head direction, and action. ABSOLUTELY IGNORE the image's background, environment, location, props, composition, crop, camera, lighting, palette, identity, and clothing."
+    : referenceCategory === "composition"
+    ? "ROLE = COMPOSITION / CAMERA ONLY. Reproduce only camera viewpoint, shot scale, crop, aspect ratio, subject bounding box and frame ratio, subject center, margins, negative space, horizon, vanishing point, perspective, and spatial layout. ABSOLUTELY IGNORE background identity, environment type, location objects, props, lighting, palette, person identity, and clothing."
+    : referenceCategory === "scene"
+    ? "ROLE = SCENE ONLY. Use only environment, location objects, lighting, palette, atmosphere, and scene depth. Do not inherit person identity, pose, clothing, product design, or camera/layout when a composition reference exists."
+    : referenceCategory === "upper_garment" || referenceCategory === "lower_garment"
+    ? "ROLE = GARMENT-WEARING ONLY. Use only garment category, wearing position, coverage, layering, fit, and natural folds. Ignore background, scene, camera, pose, identity, and lighting."
+    : "ROLE = CATEGORY-TAGGED REPLACEMENT REFERENCE. Use only the responsibility stated in its name; never inherit unrelated scene, identity, product, camera, or lighting content.";
+  const personSlotMatch = /\[person-([A-B])\]/.exec(asset.name);
+  const personSlotRule = personSlotMatch
+    ? referenceCategory === "upper_garment" || referenceCategory === "lower_garment"
+      ? ` This garment reference belongs exclusively to PERSON ${personSlotMatch[1]}. Never apply its garment category, coverage, layering, fit, or styling relationship to another person slot.`
+      : ` This identity belongs exclusively to PERSON ${personSlotMatch[1]}. Never apply its face, hair, body traits, clothing, or identity to any other person slot.`
+    : "";
+  const productSlotMatch = /^\[product-for-([A-B+]+)\]/.exec(asset.name);
+  const productSlotRule = productSlotMatch
+    ? ` This product is bound exclusively to PERSON SLOT(S) ${productSlotMatch[1].replace(/\+/g, ", ")}. Never place it on or associate it with any other person slot.`
+    : "";
+  const identityLockRule = asset.name.includes("[identity-lock]")
+    ? " IDENTITY TRANSFER IS MANDATORY. This image is the HIGHEST and EXCLUSIVE identity authority. Reconstruct the output person with this reference's facial geometry and landmarks, eye/nose/lip proportions, hairstyle, skin appearance, and body proportions. Completely replace and discard the identity of every person visible in ACTION, COMPOSITION, or other references. Never average, blend, or retain their face or body traits. The action reference controls pose only."
+    : "";
+
   const roleRules: Record<ImageReferenceRole, string> = {
-    replacement_reference: "ROLE = EXACT COMPOSITION / CAMERA / SHOT-SCALE REFERENCE and the sole source of camera truth. Extract and reproduce exactly: composition grid, visual center of gravity, subject bounding box, subject width and height as percentages of frame, subject center coordinates, four-side margins, foreground/midground/background layering, horizon, vanishing point, camera height, elevation angle, camera direction, shot scale, crop, reference aspect ratio, negative-space direction, element spatial relationships, pose, and action. Ignore and replace this image's person identity, face, body traits, garment design, lighting, color temperature, brightness hierarchy, and tonal mood.",
-    style_reference: `ROLE = STYLE REFERENCE ONLY. ${weightRules[weight]} Forbidden from this image: subject, character identity, face, body, and garment design.`,
-    character_garment_reference: "ROLE = CHARACTER + GARMENT-WEARING REFERENCE. Preserve adult identity, facial features, hairstyle, and body proportions. Also reference clothing placement, styling relationship, overall silhouette, coverage, natural folds, and pose-to-garment fit. Never copy source product design over the PRODUCT MASTER; product silhouette, waistband, leg openings, seams, texture, color, and brand structure come from the dedicated product reference.",
-    character_identity: "ROLE = CHARACTER IDENTITY ONLY. Preserve adult identity, facial features, hairstyle, and body proportions. Ignore and replace the source clothing, pose, crop, background, lighting, and props.",
-    product_master: "ROLE = PRODUCT MASTER. Preserve product silhouette, construction, color, texture, seams, binding, proportions, and visible brand structure with highest fidelity. Ignore the source background, pose, crop, and surrounding objects.",
-    product_detail: "ROLE = PRODUCT DETAIL. Preserve only the visible material and construction details. Do not inherit the source scene, pose, crop, or unrelated objects.",
+    replacement_reference: `${replacementRule}${personSlotRule}`,
+    style_reference: `ROLE = CREATIVE BASE / STYLE REFERENCE. ${weightRules[weight]} Recreate a similar overall product image using this reference's visual language, scene atmosphere, lighting, palette, composition, camera, crop, negative space, subject placement, existing people, face/body presentation, pose, action, and relationships as continuity guidance. If a dedicated CHARACTER IDENTITY reference exists, it overrides this image for identity, face, hair, and body proportions. Replace the reference product or garment with PRODUCT MASTER; never retain or blend the reference product's silhouette, color, texture, pattern, seams, branding, or construction.`,
+    character_garment_reference: `ROLE = CHARACTER + GARMENT-WEARING REFERENCE. Preserve adult identity, facial features, hairstyle, and body proportions. Also reference clothing placement, styling relationship, overall silhouette, coverage, natural folds, and pose-to-garment fit. Never copy source product design over the PRODUCT MASTER; product silhouette, waistband, leg openings, seams, texture, color, and brand structure come from the dedicated product reference.${personSlotRule}`,
+    character_identity: `ROLE = CHARACTER IDENTITY ONLY.${identityLockRule} Preserve adult identity, facial geometry, facial landmarks, eye/nose/lip proportions, hairstyle, skin appearance, and body proportions. Ignore and replace the source clothing, pose, expression, crop, background, lighting, and props.${personSlotRule}`,
+    product_master: `ROLE = PRODUCT MASTER. Preserve product silhouette, construction, color, texture, seams, binding, proportions, and visible brand structure with highest fidelity. Ignore the source background, pose, crop, and surrounding objects.${productSlotRule}`,
+    product_detail: `ROLE = PRODUCT DETAIL. Preserve only the visible material and construction details. Do not inherit the source scene, pose, crop, or unrelated objects.${productSlotRule}`,
   };
 
   return `REFERENCE IMAGE ${index + 1}: ${asset.name}. ${roleRules[asset.role]}`;
@@ -239,15 +355,19 @@ function buildGeminiGenerationPrompt(
   imageCount: number,
   modelCount: number,
   isReplacement = false,
+  replacementWorkflow = "",
 ) {
   const noPeople = modelCount === 0;
+  const isProductOnly = replacementWorkflow === "product_only";
   return [
     basePrompt,
     `[COMMERCIAL SAFETY FRAMING]\n${noPeople ? GEMINI_NO_PEOPLE_FRAMING : GEMINI_SAFE_COMMERCIAL_FRAMING}`,
-    `[BATCH VARIATION]\nThis is image ${index + 1} of ${imageCount}. Preserve the product, brand rules, and all reference-image responsibilities.${isReplacement
-      ? " This is replacement mode: reproduce the replacement-reference pose, action, camera viewpoint, shot scale, crop, aspect ratio, subject placement, negative space, and composition exactly. Do not inherit its person or lighting tone."
+    `[BATCH VARIATION]\nThis is image ${index + 1} of ${imageCount}. Preserve the product, brand rules, and all reference-image responsibilities.${isProductOnly
+      ? " Product-only replacement: preserve the immutable base image exactly outside the target product region. Remove the old product completely and replace it with PRODUCT MASTER; do not return an unchanged copy of the base image."
+      : isReplacement
+      ? " This is replacement mode: obey category tags without mixing responsibilities. [action] controls pose only; [composition] controls camera/layout only; [scene] or the selected preset controls environment only. Never copy scene content from action or composition references."
       : noPeople
-      ? " Keep every image strictly people-free. Vary only product arrangement, camera position, framing, or subtle composition."
+      ? " Do not add any human content beyond what is already explicitly present in active references. Preserve reference-contained pose or body-part support only where needed to display the product; otherwise keep the image fully people-free."
       : " Preserve character identity. Vary only pose, framing, or subtle composition where reasonable."}`,
     negativePrompt ? `[MUST AVOID]\n${negativePrompt}` : "",
   ].filter(Boolean).join("\n\n");
@@ -267,7 +387,9 @@ function buildChinesePromptPreview(
   imageCount: number,
   modelCount: number,
   isReplacement = false,
+  replacementWorkflow = "",
 ) {
+  const isProductOnly = replacementWorkflow === "product_only" || assets.some((asset) => asset.name.includes("[base_image]"));
   const roleLabels: Record<ImageReferenceRole, string> = {
     product_master: "产品主参考图",
     product_detail: "产品细节参考图",
@@ -278,31 +400,54 @@ function buildChinesePromptPreview(
   };
   const referenceBlocks = orderGeminiReferences(assets).map((asset, index) => {
     const weight = asset.weight === "high" ? "高" : asset.weight === "low" ? "低" : "中";
+    const replacementBoundary = asset.name.includes("[base_image]")
+      ? "这是原图单品替换的不可变基础图。除旧产品所在目标区域外，人物身份、面孔、发型、身体、姿势、服装遮挡、构图、场景、道具、机位、光影、阴影和所有像素均保持不变。必须完整移除旧产品，并用产品主参考图中的新产品替换；禁止保留、混合、改色或仅修饰旧产品。"
+      : asset.name.includes("[action]")
+      ? "仅提取人物姿势、肢体角度、重心、手脚位置、头部朝向和动作；严禁提取背景、场景、道具、构图、机位、裁切、光影、色彩、人物身份或服装。"
+      : asset.name.includes("[composition]")
+      ? "仅提取机位、景别、裁切、画幅、主体占比与位置、留白、地平线、透视和空间布局；严禁提取背景内容、环境类型、场景道具、光影、色彩、人物身份或服装。"
+      : asset.name.includes("[scene]")
+      ? "仅提取环境、地点元素、场景道具、光影、色彩、氛围和景深；不得控制人物身份、姿势、服装、产品设计，存在构图图时也不得控制机位与布局。"
+      : asset.name.includes("[upper_garment]") || asset.name.includes("[lower_garment]")
+      ? "仅提取服装类别、穿着位置、覆盖范围、层叠关系、贴合关系和自然褶皱；严禁提取背景、场景、机位、构图、姿势、人物身份和光影。"
+      : "严格按图片名称中的类别标签使用，不得让该图片影响标签职责以外的场景、人物、产品、机位或光影。";
     const boundary = asset.role === "replacement_reference"
-      ? "姿势、动作、图片视角和构图必须百分百复刻，包括肢体角度、动作状态、机位、景别、裁切、参考画幅、人物位置占比、留白和空间关系；不得参考人物身份、面孔、身体特征、服装设计或光影调性。"
+      ? replacementBoundary
       : asset.role === "character_garment_reference"
       ? "保持人物身份、五官、发型和体型，并参考服装的穿着位置、搭配、廓形、覆盖范围、自然褶皱及姿势贴合；巴迪高产品设计细节仍严格服从产品主参考图。"
       : asset.role === "product_master" || asset.role === "product_detail"
       ? "仅锁定产品外观、结构、材质和细节，不复制原图背景与构图。"
       : asset.role === "character_identity"
-      ? "仅保持成年人物身份、五官、发型和体型，不复制服装、姿势、裁切、背景与光线。"
-      : "可参考视觉风格、姿势、动作、裁切、机位、背景、道具、物体位置与构图；禁止复制主体、人物身份、脸、身体和服装设计。";
+      ? asset.name.includes("[identity-lock]")
+        ? "人物身份必须完成强制替换。该图是最高且唯一的人物身份依据：严格锁定脸型、五官几何与关键点、眼鼻唇比例、发型、肤色观感和体型比例；动作/构图参考图只提供姿势或机位，必须完全丢弃其中原人物的面孔与身体特征，禁止身份混合；不复制本图的服装、姿势、表情、裁切、背景与光线。"
+        : "仅保持成年人物身份、五官、发型和体型，不复制服装、姿势、裁切、背景与光线。"
+      : `${asset.weight === "high"
+        ? "【高权重·强制】锁定主体与构图骨架：保留参考图已有的人物数量与是否有人、相对位置、姿势动作、互动关系、裁切、机位、主体占比、主要道具、产品位置、留白、背景组织、光线和色彩；严禁把含人物参考图退化为孤立产品静物或陈列台单品图。"
+        : asset.weight === "medium"
+        ? "【中权重】主体安排、人物关系与构图方向必须清晰可识别，不得无理由转成孤立产品静物。"
+        : "【低权重】仅作为次要视觉提示，允许页面场景与摄影参数主导。"} 作为整体创意基准生成相似风格的产品图；若上传专用人物形象图，人物身份、五官、发型和体型改为严格服从人物图。参考图中的原产品或服装必须替换为产品主图，原产品的版型、颜色、纹理、图案、缝线、标识和结构不得带入结果。`;
     return `参考图${index + 1}：${asset.name}（${roleLabels[asset.role]}，权重：${weight}）\n${boundary}`;
   });
 
   return [
     basePrompt,
     `【商业安全构图】\n${modelCount === 0
-      ? "严格保持无人画面，不得出现人物、人体局部、手、脸、皮肤、人物倒影或人形模特。"
+      ? "0人表示禁止自主新增人物或人体内容。若有效参考图已含人物或人体局部，仅可保留其既有数量、裁切、姿势、动作、遮挡及与产品的接触关系作为展示载体，不得补全、扩展、复制或新增人体；参考图无人时保持纯无人产品摄影。"
       : "保持成年人物、自然姿态、非情色表达和可信人体结构，产品必须清晰、完整且无遮挡。"}`,
-    `【批次变化】\n本次生成${imageCount}张。${isReplacement
-      ? "替换模式中每张图都必须百分百复刻参考图的姿势、动作、图片视角和构图；参考图人物和光影调性不作要求。"
+    `【批次变化】\n本次生成${imageCount}张。${isProductOnly
+      ? "原图单品替换：目标产品区域以产品主参考图为最高优先级，必须移除旧产品并完整换成新产品；目标区域之外的原人物、服装、场景、构图、机位和光影保持不变。禁止输出与原场景图完全相同、产品未替换的结果。"
+      : isReplacement
+      ? "替换模式严格按类别标签分工：[action]只控制姿势，[composition]只控制机位构图，[scene]或预设场景只控制环境。严禁从动作图或构图图复制背景与场景内容。"
       : "保持产品、品牌规则与参考图职责一致，仅对动作、取景或细微构图做合理变化。"}`,
     negativePrompt ? `【必须避免】\n${negativePrompt}` : "",
     referenceBlocks.length
       ? `【参考图使用边界】\n${referenceBlocks.join("\n\n")}`
       : "【参考图使用边界】\n本次没有附加参考图。",
-    "【最终执行要求】\n替换模式必须百分百复刻替换参考图的姿势、动作、图片视角和构图；替换参考图的人物身份、面孔、身体特征、服装设计和光影调性不作为要求。人物服从人物参考图或品牌规范，产品服从产品主图，光影服从所选场景与页面色调。",
+    isProductOnly
+      ? "【最终执行要求】\n[base_image]是不可变底图，仅允许修改旧产品所在区域。必须先完整移除旧产品，再以产品主参考图的新产品进行实质替换；新产品的版型、颜色、纹理、图案、缝线和结构全部服从产品主图。禁止保留旧产品、只改颜色、混合新旧产品或返回未替换的原图。"
+      : isReplacement
+      ? "【最终执行要求】\n严格服从图片类别标签：[action]仅提供姿势，[composition]仅提供机位、占比与构图，[scene]仅提供环境。没有上传[scene]图时，预设场景独占背景、环境元素、道具、光影、色彩与氛围；严禁动作图和构图图携带任何场景内容。人物服从人物参考图或品牌规范，产品服从产品主图。"
+      : "【最终执行要求】\n创意模式以创意基准参考图决定整体主体与构图方向；高权重时必须保留参考图已有的人物数量、人物关系、姿势动作、裁切机位、主体占比、主要道具、产品位置、背景组织、光影和色彩，不得把含人物参考图改成孤立产品静物。若有专用人物图，仅人物身份服从人物图；核心产品的版型、颜色、纹理、图案、缝线、标识和结构始终只服从产品主图，并替换参考图中的原产品或原服装。",
   ].filter(Boolean).join("\n\n");
 }
 
@@ -316,15 +461,40 @@ function normalizeReferenceMetadata(value: unknown): GeminiReferenceMetadata[] {
     "style_reference",
     "replacement_reference",
   ]);
-  return value.slice(0, MAX_REFERENCE_IMAGES).map((raw, index) => {
+  if (value.length > MAX_SUBMITTED_IMAGES) throw new Error(`单次最多提交 ${MAX_SUBMITTED_IMAGES} 张候选图片。`);
+  return value.map((raw, index) => {
     const asset = (raw || {}) as Record<string, unknown>;
     const role = String(asset.role || "style_reference") as ImageReferenceRole;
     if (!allowedRoles.has(role)) throw new Error(`第 ${index + 1} 张图片角色无效。`);
     const weight = ["low", "medium", "high"].includes(String(asset.weight))
       ? String(asset.weight) as GeminiReferenceMetadata["weight"]
       : undefined;
-    return { name: String(asset.name || `参考图 ${index + 1}`), role, weight };
+    const referenceCategory = REFERENCE_CATEGORIES.has(String(asset.referenceCategory) as ReplacementReferenceCategory)
+      ? String(asset.referenceCategory) as ReplacementReferenceCategory
+      : undefined;
+    return { name: String(asset.name || `参考图 ${index + 1}`), role, weight, referenceCategory };
   });
+}
+
+function filterReferenceAssetsForWorkflow<T extends GeminiReferenceMetadata>(input: PromptCompileInput, assets: T[]): T[] {
+  if (input.visualType !== "R") return assets;
+  if (input.replacementWorkflow === "multi_replace") {
+    return assets.filter((asset) => asset.role !== "replacement_reference" || inferReferenceCategory(asset) !== "scene" || input.sceneSource === "reference");
+  }
+  const productAssets = assets.filter((asset) => asset.role === "product_master" || asset.role === "product_detail");
+  if (input.replacementWorkflow === "product_only") {
+    const baseAsset = assets.find((asset) => asset.role === "replacement_reference" && inferReferenceCategory(asset) === "base_image")
+      || assets.find((asset) => asset.role === "replacement_reference" && inferReferenceCategory(asset) === "scene");
+    return [
+      ...(baseAsset ? [{ ...baseAsset, name: baseAsset.name.replace("[scene]", "[base_image]"), referenceCategory: "base_image", weight: "high" as const } as T] : []),
+      ...productAssets,
+    ];
+  }
+  const characterAssets = assets.filter((asset) => asset.role === "character_identity" || asset.role === "character_garment_reference");
+  const workflowReferences = assets.filter((asset) => asset.role === "replacement_reference" && (
+    inferReferenceCategory(asset) === "action" || (inferReferenceCategory(asset) === "scene" && input.sceneSource === "reference")
+  ));
+  return [...workflowReferences, ...characterAssets, ...productAssets];
 }
 
 async function requestGeminiImage(args: {
@@ -629,7 +799,7 @@ async function compositeEditAtOriginalResolution(args: {
 
 function normalizeReferenceAssets(value: unknown): PromptImageInput[] {
   if (!Array.isArray(value)) return [];
-  if (value.length > MAX_REFERENCE_IMAGES) throw new Error(`参考图最多 ${MAX_REFERENCE_IMAGES} 张。`);
+  if (value.length > MAX_SUBMITTED_IMAGES) throw new Error(`单次最多提交 ${MAX_SUBMITTED_IMAGES} 张候选图片。`);
 
   const allowedRoles = new Set<ImageReferenceRole>([
     "product_master",
@@ -654,6 +824,9 @@ function normalizeReferenceAssets(value: unknown): PromptImageInput[] {
       weight: (["low", "medium", "high"].includes(String(asset.weight))
         ? String(asset.weight)
         : undefined) as PromptImageInput["weight"],
+      referenceCategory: REFERENCE_CATEGORIES.has(String(asset.referenceCategory) as ReplacementReferenceCategory)
+        ? String(asset.referenceCategory) as ReplacementReferenceCategory
+        : undefined,
     };
   });
 }
@@ -681,9 +854,9 @@ function fallbackAnalysis(asset: PromptImageInput): AssetAnalysis {
       allowedInfluence: ["服装穿着位置", "搭配关系", "整体廓形", "覆盖范围", "自然褶皱", "姿势与服装贴合关系"],
     },
     style_reference: {
-      summary: "风格参考图已接收；当前未配置视觉模型，暂未提取具体风格特征。",
+      summary: "创意基准参考图已接收；用于建立相似产品图的整体视觉、主体呈现与场景连续性，最终产品仍由产品主图替换。",
       mustPreserve: [],
-      allowedInfluence: ["构图", "光影", "色彩", "影调", "氛围"],
+      allowedInfluence: ["整体视觉语言", "场景与氛围", "光影与色彩", "构图与机位", "主体位置", "参考图已有人物呈现", "姿势与动作", "人物关系"],
     },
     replacement_reference: {
       summary: "构图参考图已接收；它是替换模式中构图、镜头角度和画幅景别的唯一依据。",
@@ -724,7 +897,7 @@ const ASSET_ANALYSIS_SYSTEM_INSTRUCTION = `
 - product_detail：补充面料与工艺局部，不改变产品整体版型。
 - character_identity：锁定人物身份、五官、发型和体型，不影响产品设计。
 - character_garment_reference：锁定人物身份、五官、发型和体型，同时提取服装穿着位置、搭配关系、整体廓形、覆盖范围、自然褶皱及姿势贴合；不得用人物图中的产品设计覆盖 product_master。
-- style_reference：可分析视觉风格、姿势、动作、裁切、机位、背景、道具、物体位置与构图；禁止提供主体、人物身份、脸、身体和服装设计。
+- style_reference：作为创意基准图分析整体视觉语言、场景、光影、色彩、影调、姿势、动作、人物与身体呈现、裁切、机位、背景、道具、物体位置、人物关系与构图。若存在 character_identity，人物身份、五官、发型和体型以专用人物图为最高优先级。严禁让参考图中的原产品或服装设计进入最终产品约束；最终产品版型、颜色、纹理、图案、缝线、标识和结构只服从 product_master。
 - replacement_reference：该图是替换模式中构图、镜头角度和画幅景别的唯一依据。必须精确提取构图网格与视觉重心；主体边界框及其占画面宽度/高度的百分比；主体中心点坐标；头顶、脚底、左右边距；前景/中景/背景层次；地平线与消失点；相机高度、俯仰角和镜头方向；景别、裁切、画幅、留白方向和元素空间关系；同时提取姿势（肢体角度、重心、手脚位置、头部朝向）与动作状态。以上全部列入 mustPreserve，尽量使用明确位置关系和百分比描述；人物身份、面孔、身体特征、服装设计、光源、色温、明暗关系和影调不得进入 mustPreserve 或 allowedInfluence。
 仅输出 JSON：{"analyses":[{"assetId":"","summary":"","observableFeatures":[],"mustPreserve":[],"allowedInfluence":[],"warnings":[]}]}
 `;
@@ -851,7 +1024,8 @@ app.post("/api/gemini/optimize", async (req, res) => {
 app.post("/api/prompt/generate", (req, res) => {
   try {
     const input = normalizePromptInput(req.body || {});
-    const assets = normalizeReferenceAssets(req.body?.assets);
+    const assets = filterReferenceAssetsForWorkflow(input, normalizeReferenceAssets(req.body?.assets));
+    const structureAudit = enforcePromptStructure(input, assets);
     const providedAnalyses = Array.isArray(req.body?.imageAnalyses)
       ? req.body.imageAnalyses as AssetAnalysis[]
       : [];
@@ -864,6 +1038,7 @@ app.post("/api/prompt/generate", (req, res) => {
 
     return res.json({
       ...compiled,
+      warnings: [...compiled.warnings, ...structureAudit.warnings],
       optimized: compiled.positivePrompt,
       analyses: imageAnalyses,
       generationMode: "local-config",
@@ -891,7 +1066,8 @@ app.post("/api/openai/generate-images", async (req, res) => {
 
   try {
     const normalizedInput = normalizePromptInput(req.body || {});
-    const assets = normalizeReferenceAssets(req.body?.assets);
+    const assets = filterReferenceAssetsForWorkflow(normalizedInput, normalizeReferenceAssets(req.body?.assets));
+    enforcePromptStructure(normalizedInput, assets);
     const analysisById = new Map((normalizedInput.imageAnalyses || []).map((analysis) => [analysis.assetId, analysis]));
     const input: PromptCompileInput = {
       ...normalizedInput,
@@ -907,17 +1083,22 @@ app.post("/api/openai/generate-images", async (req, res) => {
     const referenceMap = assets.length > 0
       ? `\n\n【参考图顺序与职责】\n${assets.map((asset, index) => `图${index + 1}：${asset.name}；角色=${asset.role}；权重=${asset.weight || "默认"}`).join("\n")}`
       : "";
-    const negativePrompt = typeof req.body?.negativePrompt === "string"
-      ? req.body.negativePrompt.trim()
-      : compiled.negativePrompt;
-    const basePrompt = typeof req.body?.prompt === "string" && req.body.prompt.trim()
-      ? req.body.prompt.trim()
-      : compiled.positivePrompt;
+    // Structured parameters are authoritative. Never allow cached client prompt
+    // text from another scene or workflow to override the current compilation.
+    const negativePrompt = compiled.negativePromptEnglish || compiled.negativePrompt;
+    const basePrompt = compiled.positivePromptEnglish || compiled.positivePrompt;
 
     await mkdir(GENERATED_DIR, { recursive: true });
     const results: string[] = [];
     for (let index = 0; index < imageCount; index += 1) {
-      const prompt = `${basePrompt}${referenceMap}\n\n【本批次变化】这是第 ${index + 1}/${imageCount} 张，在不改变产品、人物身份与品牌规则的前提下，仅对动作、取景或细微构图做合理差异化。${negativePrompt ? `\n\n【必须避免】${negativePrompt}` : ""}`;
+      const batchRule = input.replacementWorkflow === "product_only"
+        ? "仅替换目标产品；基础图的非目标区域、人物、构图、场景和光影不得发生变化。"
+        : input.replacementWorkflow === "pose_rebuild"
+          ? "严格保持[action]核心姿势；人物身份、产品和环境分别服从其专属来源，构图服从页面摄影参数。"
+          : input.visualType === "R"
+            ? "严格按类别标签分工，不允许动作、构图、场景、人物或产品参考图越权。"
+            : "在不改变产品、人物身份与品牌规则的前提下，仅对动作、取景或细微构图做合理差异化。";
+      const prompt = `${basePrompt}${referenceMap}\n\n【本批次变化】这是第 ${index + 1}/${imageCount} 张。${batchRule}${negativePrompt ? `\n\n【必须避免】${negativePrompt}` : ""}`;
       const base64 = await requestOpenAIImage({ prompt, assets, size, quality });
       const fileName = `${Date.now()}-${randomUUID()}.webp`;
       await writeFile(path.join(GENERATED_DIR, fileName), Buffer.from(base64, "base64"));
@@ -1084,13 +1265,14 @@ app.post("/api/gemini/prompt-preview", (req, res) => {
   try {
     const input = normalizePromptInput(req.body || {});
     const compiled = compilePrompt(input);
-    const assets = normalizeReferenceMetadata(req.body?.assetMetadata);
+    const assets = filterReferenceAssetsForWorkflow(input, normalizeReferenceMetadata(req.body?.assetMetadata));
+    const structureAudit = auditPromptStructure(input, assets);
     const imageCount = Math.max(1, Math.min(6, Number(input.imageCount) || 1));
     const basePrompt = compiled.positivePromptEnglish || compiled.positivePrompt;
     const negativePrompt = compiled.negativePromptEnglish || compiled.negativePrompt;
     const displayBasePrompt = compiled.positivePrompt;
     const displayNegativePrompt = compiled.negativePrompt;
-    const generationPrompt = buildGeminiGenerationPrompt(basePrompt, negativePrompt, 0, imageCount, input.modelCount, input.visualType === "R");
+    const generationPrompt = buildGeminiGenerationPrompt(basePrompt, negativePrompt, 0, imageCount, input.modelCount, input.visualType === "R", input.replacementWorkflow);
 
     return res.json({
       prompt: buildGeminiPromptPreview(generationPrompt, assets),
@@ -1101,8 +1283,11 @@ app.post("/api/gemini/prompt-preview", (req, res) => {
         imageCount,
         input.modelCount,
         input.visualType === "R",
+        input.replacementWorkflow,
       ),
       negativePrompt,
+      promptStructureAudit: structureAudit,
+      warnings: [...compiled.warnings, ...structureAudit.warnings, ...structureAudit.errors],
       model: process.env.GEMINI_IMAGE_MODEL || "gemini-3-pro-image",
     });
   } catch (error) {
@@ -1324,7 +1509,8 @@ app.post("/api/gemini/generate-images", async (req, res) => {
 
   try {
     const normalizedInput = normalizePromptInput(req.body || {});
-    const assets = normalizeReferenceAssets(req.body?.assets);
+    const assets = filterReferenceAssetsForWorkflow(normalizedInput, normalizeReferenceAssets(req.body?.assets));
+    enforcePromptStructure(normalizedInput, assets);
     const analysisById = new Map((normalizedInput.imageAnalyses || []).map((analysis) => [analysis.assetId, analysis]));
     const input: PromptCompileInput = {
       ...normalizedInput,
@@ -1351,8 +1537,13 @@ app.post("/api/gemini/generate-images", async (req, res) => {
       });
     }
     let effectiveAspectRatio = input.aspectRatio;
-    if (replacementReference) {
-      const parsedReference = parseImageDataUrl(replacementReference.dataUrl);
+    const aspectRatioReference = input.replacementWorkflow === "product_only"
+      ? assets.find((asset) => inferReferenceCategory(asset) === "base_image")
+      : input.replacementWorkflow === "multi_replace"
+        ? assets.find((asset) => inferReferenceCategory(asset) === "composition")
+        : undefined;
+    if (aspectRatioReference) {
+      const parsedReference = parseImageDataUrl(aspectRatioReference.dataUrl);
       const metadata = await sharp(Buffer.from(parsedReference.data, "base64")).metadata();
       if (metadata.width && metadata.height) {
         effectiveAspectRatio = getClosestGeminiAspectRatio(metadata.width, metadata.height);
@@ -1381,7 +1572,7 @@ app.post("/api/gemini/generate-images", async (req, res) => {
 
     for (let index = 0; index < imageCount; index += 1) {
       failureStage = "generating";
-      const prompt = buildGeminiGenerationPrompt(basePrompt, negativePrompt, index, imageCount, input.modelCount, input.visualType === "R");
+      const prompt = buildGeminiGenerationPrompt(basePrompt, negativePrompt, index, imageCount, input.modelCount, input.visualType === "R", input.replacementWorkflow);
 
       let generated;
       let activeAttemptController = new AbortController();
@@ -1401,7 +1592,7 @@ app.post("/api/gemini/generate-images", async (req, res) => {
              activeAttemptController = new AbortController();
              console.log("Starting isolated Gemini safety retry", { attemptId: retryAttemptId });
              generated = await generateOne(
-               buildGeminiGenerationPrompt(refinedPrompt, negativePrompt, index, imageCount, input.modelCount, input.visualType === "R"),
+               buildGeminiGenerationPrompt(refinedPrompt, negativePrompt, index, imageCount, input.modelCount, input.visualType === "R", input.replacementWorkflow),
                activeAttemptController.signal,
                retryAttemptId,
              );
